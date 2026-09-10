@@ -37,7 +37,36 @@ const ACCOUNTS = [
 ];
 
 async function seed() {
-  console.log("Seeding 10 real accounts with admin API...");
+  console.log("=== DOOR Database Seeding ===");
+  console.log("Checking Supabase connection & cleaning up broken accounts...");
+
+  // 1. Fetch existing users to clean up broken raw-SQL accounts
+  const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers({
+    page: 1,
+    perPage: 100,
+  });
+
+  if (listErr) {
+    console.error("Failed to list existing users:", listErr.message);
+  } else if (listData?.users) {
+    const doorUsers = listData.users.filter((u) => u.email?.endsWith("@door.id"));
+    console.log(`Found ${doorUsers.length} existing @door.id account(s). Deleting old records...`);
+    for (const u of doorUsers) {
+      // Delete any leftover profile first if needed
+      await supabaseAdmin.from("profiles").delete().eq("id", u.id);
+      const { error: delErr } = await supabaseAdmin.auth.admin.deleteUser(u.id);
+      if (delErr) {
+        console.warn(`  Warning deleting user ${u.email}:`, delErr.message);
+      } else {
+        console.log(`  Deleted old user: ${u.email} (${u.id})`);
+      }
+    }
+  }
+
+  console.log("\nRe-creating all 10 accounts with Admin API (email_confirm: true, password: KOMINFO2026)...");
+  
+  const createdAccounts = [];
+
   for (const acc of ACCOUNTS) {
     const email = `${acc.username}@door.id`;
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
@@ -52,32 +81,49 @@ async function seed() {
     });
 
     if (error) {
-      console.warn(`User ${email} creation message:`, error.message);
-    } else {
-      console.log(`Created user: ${acc.username} (${acc.role}) - ${acc.full_name}`);
-      // Ensure profile exists
-      if (data.user) {
-        await supabaseAdmin.from("profiles").upsert({
-          id: data.user.id,
-          full_name: acc.full_name,
-          role: acc.role,
-          division: acc.division,
-        });
+      console.error(`❌ Failed to create user ${email}:`, error.message);
+    } else if (data.user) {
+      console.log(`✅ Created user: ${acc.username} (${acc.role}) - ${acc.full_name} [ID: ${data.user.id}]`);
+      
+      // Ensure profile row exists with accurate role and division
+      const { error: profErr } = await supabaseAdmin.from("profiles").upsert({
+        id: data.user.id,
+        full_name: acc.full_name,
+        role: acc.role,
+        division: acc.division,
+      });
+
+      if (profErr) {
+        console.warn(`  ⚠️ Profile upsert warning for ${acc.username}:`, profErr.message);
+      } else {
+        console.log(`  └─ Profile verified: role=${acc.role}, division=${acc.division}`);
       }
+
+      createdAccounts.push({
+        id: data.user.id,
+        username: acc.username,
+        email,
+        role: acc.role,
+        confirmed: !!data.user.email_confirmed_at,
+      });
     }
   }
 
   // Ensure storage bucket exists
+  console.log("\nVerifying 'completion-photos' storage bucket...");
   const { data: bData, error: bErr } = await supabaseAdmin.storage.createBucket("completion-photos", {
     public: true,
     fileSizeLimit: 10485760,
   });
   if (bErr) {
-    console.log("Storage bucket check:", bErr.message);
+    console.log("Storage bucket notice:", bErr.message);
   } else {
-    console.log("Storage bucket 'completion-photos' created successfully.");
+    console.log("Storage bucket 'completion-photos' verified/created successfully.");
   }
-  console.log("Seeding complete!");
+
+  console.log("\n=== Seeding Summary ===");
+  console.log(`Successfully created and confirmed ${createdAccounts.length} / ${ACCOUNTS.length} accounts:`);
+  console.table(createdAccounts);
 }
 
 seed().catch(console.error);

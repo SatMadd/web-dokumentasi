@@ -4,12 +4,14 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   label?: string;
   error?: string;
   helperText?: string;
+  rightElement?: React.ReactNode;
 }
 
 export function Input({
   label,
   error,
   helperText,
+  rightElement,
   id,
   className = "",
   ...props
@@ -26,13 +28,22 @@ export function Input({
           {label}
         </label>
       )}
-      <input
-        id={inputId}
-        className={`w-full bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-secondary)]/60 focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)] focus:border-[var(--accent-blue)] transition-colors min-h-[44px] ${
-          error ? "border-[var(--accent-red)] focus:ring-[var(--accent-red)]" : ""
-        } ${className}`}
-        {...props}
-      />
+      <div className="relative w-full flex items-center">
+        <input
+          id={inputId}
+          className={`w-full bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-secondary)]/60 focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)] focus:border-[var(--accent-blue)] transition-colors min-h-[44px] ${
+            rightElement ? "pr-10" : ""
+          } ${
+            error ? "border-[var(--accent-red)] focus:ring-[var(--accent-red)]" : ""
+          } ${className}`}
+          {...props}
+        />
+        {rightElement && (
+          <div className="absolute right-2.5 flex items-center justify-center text-[var(--text-secondary)]">
+            {rightElement}
+          </div>
+        )}
+      </div>
       {error ? (
         <span className="text-xs text-[var(--accent-red)]">{error}</span>
       ) : helperText ? (
