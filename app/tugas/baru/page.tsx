@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Plus, X, Calendar, Clock, User, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Plus, X, ShieldAlert } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, Input } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -20,7 +20,7 @@ interface AssigneeRow {
 
 export default function CreateTaskPage() {
   const router = useRouter();
-  const { profile, isHead, isLoading } = useAuth();
+  const { user, profile, isHead, isLoading } = useAuth();
   const supabase = createClient();
 
   const [title, setTitle] = useState("");
@@ -94,10 +94,10 @@ export default function CreateTaskPage() {
   };
 
   // Assign user to specific row
-  const handleSelectAssignee = (user: Profile) => {
+  const handleSelectAssignee = (selectedUser: Profile) => {
     if (!activeRowIdForSearch) return;
     setAssigneeRows((prev) =>
-      prev.map((r) => (r.id === activeRowIdForSearch ? { ...r, user } : r))
+      prev.map((r) => (r.id === activeRowIdForSearch ? { ...r, user: selectedUser } : r))
     );
     setActiveRowIdForSearch(null);
   };
@@ -105,6 +105,11 @@ export default function CreateTaskPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (!user) {
+      setErrorMsg("Sesi login Anda tidak valid. Silakan login kembali.");
+      return;
+    }
 
     if (!title.trim()) {
       setErrorMsg("Nama / judul tugas wajib diisi");
@@ -134,13 +139,12 @@ export default function CreateTaskPage() {
     setIsSubmitting(true);
 
     try {
-      // 1. Insert into tasks
-      const currentUserId = profile?.id || "00000000-0000-0000-0000-000000000001";
+      // 1. Insert into tasks table
       const { data: taskData, error: taskError } = await supabase
         .from("tasks")
         .insert({
-          title,
-          created_by: currentUserId,
+          title: title.trim(),
+          created_by: user.id,
           planned_location: location.address || null,
           planned_location_lat: location.lat,
           planned_location_lng: location.lng,
@@ -152,10 +156,13 @@ export default function CreateTaskPage() {
         .single();
 
       if (taskError) {
-        console.warn("Supabase insert task error (falling back to mock state):", taskError.message);
+        console.error("Task insert error:", taskError);
+        setErrorMsg(`Gagal menyimpan tugas: ${taskError.message}`);
+        setIsSubmitting(false);
+        return;
       }
 
-      const createdTaskId = taskData?.id || `mock-${Date.now()}`;
+      const createdTaskId = taskData.id;
 
       // 2. Insert into task_assignees
       const assigneeInserts = validAssignees.map((a) => ({
@@ -163,14 +170,23 @@ export default function CreateTaskPage() {
         user_id: a.id,
       }));
 
-      await supabase.from("task_assignees").insert(assigneeInserts);
+      const { error: assigneeError } = await supabase
+        .from("task_assignees")
+        .insert(assigneeInserts);
+
+      if (assigneeError) {
+        console.error("Assignee insert error:", assigneeError);
+        setErrorMsg(`Tugas tersimpan tetapi gagal menghubungkan pelaksana: ${assigneeError.message}`);
+        setIsSubmitting(false);
+        return;
+      }
 
       // 3. Trigger notification for each assignee
       const notifInserts = validAssignees.map((a) => ({
         user_id: a.id,
         type: "task_assigned",
         reference_id: createdTaskId,
-        message: `Anda telah ditugaskan ke: ${title}`,
+        message: `Anda telah ditugaskan ke: ${title.trim()}`,
         is_read: false,
       }));
 
@@ -179,9 +195,8 @@ export default function CreateTaskPage() {
       // Successfully saved! Redirect to Tugas list
       router.push("/tugas");
     } catch (err: any) {
-      console.error("Submit error:", err);
-      // Even in offline demo mode, redirect safely
-      router.push("/tugas");
+      console.error("Submit exception:", err);
+      setErrorMsg(err?.message || "Terjadi kesalahan saat memproses data ke database");
     } finally {
       setIsSubmitting(false);
     }
@@ -211,7 +226,7 @@ export default function CreateTaskPage() {
             Buat Penugasan Baru
           </h1>
           <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-1">
-            Penugasan yang dibuat akan diteruskan ke penerima tugas terpilih.
+            Penugasan yang dibuat akan diteruskan ke penerima tugas terpilih dan disimpan ke database.
           </p>
         </div>
 
@@ -233,7 +248,7 @@ export default function CreateTaskPage() {
             {/* Title */}
             <Input
               label="Judul / Nama Tugas / Rapat *"
-              placeholder="Contoh: Rapat Koordinasi Wilayah II"
+              placeholder="Contoh: Rapat Koordinasi Penataan Arsip"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -294,7 +309,7 @@ export default function CreateTaskPage() {
 
               {/* Rows */}
               <div className="space-y-2.5">
-                {assigneeRows.map((row, index) => {
+                {assigneeRows.map((row) => {
                   const hasUser = row.user !== null;
 
                   return (
@@ -336,7 +351,9 @@ export default function CreateTaskPage() {
                           <span className="text-sm text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
                             Cari nama anggota atau kepala...
                           </span>
-                          <User className="w-4 h-4 text-[var(--text-secondary)] group-hover:text-[var(--accent-blue)]" />
+                          <span className="text-xs text-[var(--accent-blue)] group-hover:underline">
+                            Pilih Nama →
+                          </span>
                         </button>
                       )}
 

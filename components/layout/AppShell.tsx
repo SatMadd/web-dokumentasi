@@ -30,7 +30,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
-  const { profile, role, isHead, signOut, switchDemoUser, isDemoMode } = useAuth();
+  const { profile, role, isHead, signOut, isLoading } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -137,7 +137,6 @@ export function AppShell({ children }: AppShellProps) {
             aria-label="Notifikasi"
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[var(--accent-blue)]" />
           </Link>
 
           {/* Profile & Role Dropdown */}
@@ -151,11 +150,11 @@ export function AppShell({ children }: AppShellProps) {
                 {(profile?.full_name || "U").charAt(0).toUpperCase()}
               </div>
               <div className="hidden md:flex flex-col text-left">
-                <span className="text-xs font-medium text-[var(--text-primary)] leading-tight max-w-[120px] truncate">
-                  {profile?.full_name || "Pengguna"}
+                <span className="text-xs font-medium text-[var(--text-primary)] leading-tight max-w-[140px] truncate">
+                  {profile?.full_name || (isLoading ? "Memuat..." : "Pengguna")}
                 </span>
                 <span className="text-[10px] text-[var(--text-secondary)] leading-tight">
-                  {isHead ? "Kepala" : "Anggota"}
+                  {isHead ? "Kepala (Head)" : "Anggota (Member)"}
                 </span>
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-[var(--text-secondary)] hidden md:block" />
@@ -169,7 +168,7 @@ export function AppShell({ children }: AppShellProps) {
                     {profile?.full_name}
                   </p>
                   <p className="text-[11px] text-[var(--text-secondary)] truncate">
-                    {profile?.division || "Divisi Umum"}
+                    {profile?.division || "Divisi Operasional"}
                   </p>
                   <div className="mt-1.5">
                     <Badge size="sm" variant={isHead ? "blue" : "neutral"}>
@@ -178,38 +177,16 @@ export function AppShell({ children }: AppShellProps) {
                   </div>
                 </div>
 
-                {/* Role Switcher for quick evaluation */}
-                <div className="px-3 py-2 text-[11px] text-[var(--text-secondary)]">
-                  <span className="font-semibold block mb-1">Ganti Akun Demo:</span>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        switchDemoUser("head");
-                        setIsProfileMenuOpen(false);
-                      }}
-                      className={`px-2 py-1 text-left rounded text-[10px] font-medium ${
-                        isHead ? "bg-[var(--accent-blue)] text-white" : "hover:bg-[var(--surface-hover)]"
-                      }`}
-                    >
-                      Suprapto (Kepala)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        switchDemoUser("member1");
-                        setIsProfileMenuOpen(false);
-                      }}
-                      className={`px-2 py-1 text-left rounded text-[10px] font-medium ${
-                        !isHead ? "bg-[var(--accent-blue)] text-white" : "hover:bg-[var(--surface-hover)]"
-                      }`}
-                    >
-                      Budi (Anggota)
-                    </button>
-                  </div>
-                </div>
+                <div className="pt-1">
+                  <Link
+                    href="/profile"
+                    onClick={() => setIsProfileMenuOpen(false)}
+                    className="w-full px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--surface-hover)] rounded-[var(--radius-sm)] flex items-center gap-2"
+                  >
+                    <UserIcon className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                    <span>Lihat Profil</span>
+                  </Link>
 
-                <div className="border-t border-[var(--border)] mt-1 pt-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -290,9 +267,19 @@ export function AppShell({ children }: AppShellProps) {
               )}
             </div>
 
-            <div className="pt-4 border-t border-[var(--border)] text-xs text-[var(--text-secondary)]">
-              <p className="font-medium text-[var(--text-primary)] truncate">{profile?.full_name}</p>
-              <p className="text-[11px] capitalize">{role === "head" ? "Kepala (Head)" : "Anggota (Member)"}</p>
+            <div className="pt-4 border-t border-[var(--border)] flex items-center justify-between">
+              <div className="text-xs text-[var(--text-secondary)]">
+                <p className="font-medium text-[var(--text-primary)] truncate max-w-[150px]">{profile?.full_name}</p>
+                <p className="text-[11px] capitalize">{role === "head" ? "Kepala (Head)" : "Anggota (Member)"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => signOut()}
+                className="p-2 text-[var(--accent-red)] hover:bg-[var(--surface-hover)] rounded-[var(--radius-sm)]"
+                title="Keluar"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>

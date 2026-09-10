@@ -1,23 +1,60 @@
 "use client";
 
-import React, { useState } from "react";
-import { User, Shield, Building, Mail, Check, LogOut } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Shield, Check, LogOut, Loader2 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, Input } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/context/auth-context";
+import { createClient } from "@/lib/supabase/client";
 
 export default function ProfilePage() {
-  const { profile, isHead, signOut, switchDemoUser } = useAuth();
-  const [fullName, setFullName] = useState(profile?.full_name || "");
-  const [division, setDivision] = useState(profile?.division || "");
-  const [isSaved, setIsSaved] = useState(false);
+  const { user, profile, isHead, signOut, refreshProfile } = useAuth();
+  const supabase = createClient();
 
-  const handleSave = (e: React.FormEvent) => {
+  const [fullName, setFullName] = useState("");
+  const [division, setDivision] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (profile) {
+      setFullName(profile.full_name || "");
+      setDivision(profile.division || "");
+    }
+  }, [profile]);
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
+    if (!user) return;
+
+    setIsSaving(true);
+    setErrorMsg(null);
+
+    try {
+      // Real Supabase update to public.profiles
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          full_name: fullName.trim(),
+          division: division.trim(),
+        })
+        .eq("id", user.id);
+
+      if (error) {
+        setErrorMsg(`Gagal memperbarui profil: ${error.message}`);
+      } else {
+        await refreshProfile();
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 3000);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Terjadi kesalahan saat menyimpan profil");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -32,6 +69,12 @@ export default function ProfilePage() {
           </p>
         </div>
 
+        {errorMsg && (
+          <div className="p-3 bg-[var(--accent-red)]/15 border border-[var(--accent-red)]/30 rounded-[var(--radius-md)] text-xs text-[var(--accent-red)]">
+            {errorMsg}
+          </div>
+        )}
+
         <Card className="space-y-6">
           {/* Header avatar & role */}
           <div className="flex items-center gap-4 pb-6 border-b border-[var(--border)]">
@@ -43,7 +86,7 @@ export default function ProfilePage() {
                 {profile?.full_name}
               </h2>
               <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                {profile?.division || "Divisi Operasional"}
+                {user?.email}
               </p>
               <div className="mt-2">
                 <Badge variant={isHead ? "blue" : "neutral"} size="sm">
@@ -70,10 +113,14 @@ export default function ProfilePage() {
 
             <div>
               <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
-                Tingkat Akses / Peran (Ditentukan oleh Administrator)
+                Tingkat Akses / Peran (Ditentukan oleh Kebijakan RLS Database)
               </label>
               <div className="p-3 bg-[var(--surface-hover)]/70 border border-[var(--border)] rounded-[var(--radius-md)] text-xs text-[var(--text-secondary)] flex items-center justify-between">
-                <span>{isHead ? "Kepala (Head) — Hak Buat Tugas & Persetujuan" : "Anggota (Member) — Pelaksana & Pelapor"}</span>
+                <span>
+                  {isHead
+                    ? "Kepala (Head) — Hak Buat Tugas & Persetujuan"
+                    : "Anggota (Member) — Pelaksana & Pelapor"}
+                </span>
                 <Shield className="w-4 h-4 text-[var(--accent-blue)]" />
               </div>
             </div>
@@ -81,44 +128,27 @@ export default function ProfilePage() {
             <div className="pt-2 flex items-center justify-between">
               {isSaved ? (
                 <span className="text-xs text-[var(--status-success)] flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" /> Perubahan berhasil disimpan
+                  <Check className="w-3.5 h-3.5" /> Perubahan profil berhasil disimpan
                 </span>
               ) : <div />}
 
-              <Button type="submit" variant="primary" size="sm">
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                isLoading={isSaving}
+              >
                 Simpan Profil
               </Button>
             </div>
           </form>
 
-          {/* Quick testing switch */}
-          <div className="pt-4 border-t border-[var(--border)]">
-            <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
-              Uji Coba Peran Lain (Mode Pengujian):
+          {/* Logout Section */}
+          <div className="pt-4 border-t border-[var(--border)] flex items-center justify-between">
+            <span className="text-xs text-[var(--text-secondary)]">
+              Akhiri sesi login dari perangkat ini
             </span>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => switchDemoUser("head")}
-                className="text-xs"
-              >
-                Ubah ke Kepala (Head)
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => switchDemoUser("member1")}
-                className="text-xs"
-              >
-                Ubah ke Anggota (Member)
-              </Button>
-            </div>
-          </div>
 
-          <div className="pt-2 border-t border-[var(--border)]">
             <Button
               type="button"
               variant="destructive"
@@ -126,7 +156,7 @@ export default function ProfilePage() {
               onClick={() => signOut()}
               icon={<LogOut className="w-3.5 h-3.5" />}
             >
-              Keluar dari Sesi
+              Keluar (Sign Out)
             </Button>
           </div>
         </Card>

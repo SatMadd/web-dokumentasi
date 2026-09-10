@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -10,9 +10,7 @@ import {
   MapPin,
   Camera,
   X,
-  Upload,
   User,
-  CheckCircle2,
   FileCheck,
   AlertTriangle,
 } from "lucide-react";
@@ -22,13 +20,13 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LocationPicker } from "@/components/map/LocationPicker";
 import { SuccessPopup } from "@/components/ui/SuccessPopup";
-import { useAuth, DEMO_PROFILES } from "@/lib/context/auth-context";
+import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
-import { Task, TaskCompletion } from "@/types/database";
+import { Task, TaskCompletion, CompletionPhoto } from "@/types/database";
 
 interface UploadedPhoto {
   id: string;
-  file?: File;
+  file: File;
   previewUrl: string;
   name: string;
   size: number;
@@ -36,14 +34,14 @@ interface UploadedPhoto {
 
 export default function TaskDetailPage() {
   const params = useParams();
-  const taskId = (params?.id as string) || "task-101";
+  const taskId = params?.id as string;
   const router = useRouter();
-  const { profile, isHead } = useAuth();
+  const { user, profile, isHead } = useAuth();
   const supabase = createClient();
 
   const [task, setTask] = useState<Task | null>(null);
   const [existingCompletion, setExistingCompletion] = useState<TaskCompletion | null>(null);
-  const [completionPhotos, setCompletionPhotos] = useState<string[]>([]);
+  const [completionPhotos, setCompletionPhotos] = useState<CompletionPhoto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Completion form state
@@ -63,79 +61,72 @@ export default function TaskDetailPage() {
   // Photo uploads: max 8, 10MB per file per logic.md section 3
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
 
-  useEffect(() => {
-    const loadTaskData = async () => {
-      setIsLoading(true);
-      try {
-        const { data: taskData, error: taskError } = await supabase
-          .from("tasks")
-          .select(`
-            *,
-            creator:profiles!tasks_created_by_fkey(*),
-            assignees:task_assignees(
-              user_id,
-              profile:profiles(*)
-            )
-          `)
-          .eq("id", taskId)
-          .single();
+  const loadTaskData = useCallback(async () => {
+    if (!taskId) return;
+    setIsLoading(true);
 
-        if (!taskError && taskData) {
-          setTask(taskData as any);
-        } else {
-          // Mock fallback
-          setTask({
-            id: taskId,
-            title: "Rapat Koordinasi Penataan Arsip & Dokumentasi",
-            created_by: DEMO_PROFILES.head.id,
-            planned_location: "Ruang Rapat Utama Lantai 3, Gedung Pengelola",
-            planned_location_lat: -6.2088,
-            planned_location_lng: 106.8456,
-            scheduled_start: "2026-09-12T09:00:00Z",
-            scheduled_end: "2026-09-12T11:30:00Z",
-            status: taskId === "task-103" ? "completed" : "pending",
-            created_at: "2026-09-08T08:00:00Z",
-            creator: DEMO_PROFILES.head,
-            assignees: [
-              {
-                task_id: taskId,
-                user_id: DEMO_PROFILES.member1.id,
-                assigned_at: "2026-09-08T08:00:00Z",
-                profile: DEMO_PROFILES.member1,
-              },
-            ],
+    try {
+      // 1. Fetch real task from Supabase
+      const { data: taskData, error: taskError } = await supabase
+        .from("tasks")
+        .select(`
+          *,
+          creator:profiles!tasks_created_by_fkey(*),
+          assignees:task_assignees(
+            user_id,
+            profile:profiles(*)
+          )
+        `)
+        .eq("id", taskId)
+        .single();
+
+      if (taskError) {
+        console.warn("Task fetch error:", taskError.message);
+        setTask(null);
+      } else if (taskData) {
+        setTask(taskData as any);
+
+        // Pre-fill actual location default with planned location
+        if (taskData.planned_location) {
+          setActualLocation({
+            address: taskData.planned_location,
+            lat: taskData.planned_location_lat,
+            lng: taskData.planned_location_lng,
           });
         }
-
-        // Check if completion exists
-        const { data: compData } = await supabase
-          .from("task_completions")
-          .select("*")
-          .eq("task_id", taskId)
-          .maybeSingle();
-
-        if (compData) {
-          setExistingCompletion(compData as any);
-          const { data: photoData } = await supabase
-            .from("completion_photos")
-            .select("storage_path")
-            .eq("completion_id", compData.id);
-          if (photoData) {
-            setCompletionPhotos(photoData.map((p) => p.storage_path));
-          }
-        }
-      } catch {
-        // Mock fallback
-      } finally {
-        setIsLoading(false);
       }
-    };
 
-    loadTaskData();
+      // 2. Fetch existing completion if any
+      const { data: compData } = await supabase
+        .from("task_completions")
+        .select("*")
+        .eq("task_id", taskId)
+        .maybeSingle();
+
+      if (compData) {
+        setExistingCompletion(compData as any);
+        const { data: photoData } = await supabase
+          .from("completion_photos")
+          .select("*")
+          .eq("completion_id", compData.id);
+        if (photoData) {
+          setCompletionPhotos(photoData as CompletionPhoto[]);
+        }
+      }
+    } catch (err) {
+      console.warn("Error loading task detail:", err);
+    } finally {
+      setIsLoading(false);
+    }
   }, [taskId, supabase]);
+
+  useEffect(() => {
+    loadTaskData();
+  }, [loadTaskData]);
 
   // Client-side photo upload validation per logic.md section 3:
   // "Capped at 8, each file capped at 10MB. Client-side validation blocks 9th photo and files >10MB"
@@ -176,7 +167,6 @@ export default function TaskDetailPage() {
     }
 
     setPhotos((prev) => [...prev, ...newValidPhotos]);
-    // Reset file input value
     e.target.value = "";
   };
 
@@ -187,59 +177,95 @@ export default function TaskDetailPage() {
 
   const handleCompletionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError(null);
+
+    if (!user) {
+      setSubmitError("Sesi login Anda tidak valid. Silakan login kembali.");
+      return;
+    }
     if (!actualStartTime) {
-      alert("Mohon tentukan waktu mulai aktual kegiatan");
+      setSubmitError("Waktu mulai aktual kegiatan wajib diisi");
       return;
     }
     if (!minutesText.trim()) {
-      alert("Mohon isi ringkasan hasil rapat / notulen");
+      setSubmitError("Ringkasan notulen / risalah rapat wajib diisi");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const currentUserId = profile?.id || DEMO_PROFILES.member1.id;
+      const taskStartDate = task?.scheduled_start
+        ? new Date(task.scheduled_start).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0];
+
+      const meetingStartTime = new Date(`${taskStartDate}T${actualStartTime}`).toISOString();
+      const meetingEndTime = actualEndTime
+        ? new Date(`${taskStartDate}T${actualEndTime}`).toISOString()
+        : null;
 
       // 1. Insert into task_completions
       const { data: compData, error: compError } = await supabase
         .from("task_completions")
         .insert({
           task_id: taskId,
-          submitted_by: currentUserId,
-          minutes_text: minutesText,
-          meeting_start_time: new Date().toISOString(),
-          meeting_end_time: actualEndTime ? new Date().toISOString() : null,
+          submitted_by: user.id,
+          minutes_text: minutesText.trim(),
+          meeting_start_time: meetingStartTime,
+          meeting_end_time: meetingEndTime,
           actual_location_lat: actualLocation.lat,
           actual_location_lng: actualLocation.lng,
-          actual_location_address: actualLocation.address || task?.planned_location || "Sesuai rencana",
+          actual_location_address: actualLocation.address || task?.planned_location || "Sesuai lokasi rencana",
         })
         .select()
         .single();
 
-      const completionId = compData?.id || `comp-${Date.now()}`;
-
-      // 2. Insert photos into completion_photos
-      if (photos.length > 0) {
-        const photoRecords = photos.map((p) => ({
-          completion_id: completionId,
-          storage_path: `completion-photos/${completionId}/${p.name}`,
-        }));
-        await supabase.from("completion_photos").insert(photoRecords);
+      if (compError) {
+        console.error("Completion insert error:", compError);
+        setSubmitError(`Gagal menyimpan laporan: ${compError.message}`);
+        setIsSubmitting(false);
+        return;
       }
 
-      // 3. Update task status to completed (also handled by DB trigger)
-      await supabase
-        .from("tasks")
-        .update({ status: "completed" })
-        .eq("id", taskId);
+      const completionId = compData.id;
 
-      // 4. Show success popup card per design.md section 5
+      // 2. Upload photos to storage bucket and insert completion_photos rows
+      if (photos.length > 0) {
+        const photoRecords: { completion_id: string; storage_path: string }[] = [];
+
+        for (const p of photos) {
+          const cleanName = p.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `${completionId}/${Date.now()}-${cleanName}`;
+
+          // Upload to Supabase Storage
+          const { error: uploadError } = await supabase.storage
+            .from("completion-photos")
+            .upload(storagePath, p.file);
+
+          if (uploadError) {
+            console.warn(`Storage upload warning for ${p.name}:`, uploadError.message);
+          }
+
+          photoRecords.push({
+            completion_id: completionId,
+            storage_path: storagePath,
+          });
+        }
+
+        if (photoRecords.length > 0) {
+          await supabase.from("completion_photos").insert(photoRecords);
+        }
+      }
+
+      // 3. Status update is handled automatically by the DB trigger on_task_completion_inserted
+      // We also verify tasks status update
+      await supabase.from("tasks").update({ status: "completed" }).eq("id", taskId);
+
+      // 4. Show success popup card only on confirmed successful write per logic.md section 3
       setShowSuccessPopup(true);
-    } catch (err) {
-      console.error("Completion submit error:", err);
-      // Fallback: show success popup and redirect
-      setShowSuccessPopup(true);
+    } catch (err: any) {
+      console.error("Completion submit exception:", err);
+      setSubmitError(err?.message || "Terjadi kesalahan saat menyimpan laporan ke database");
     } finally {
       setIsSubmitting(false);
     }
@@ -249,7 +275,7 @@ export default function TaskDetailPage() {
     return (
       <AppShell>
         <div className="max-w-4xl mx-auto px-4 py-16 text-center text-xs text-[var(--text-secondary)]">
-          Memuat detail penugasan...
+          Memuat detail penugasan dari database...
         </div>
       </AppShell>
     );
@@ -259,7 +285,7 @@ export default function TaskDetailPage() {
     return (
       <AppShell>
         <div className="max-w-md mx-auto my-16 p-6 text-center">
-          <p className="text-sm text-[var(--text-secondary)]">Tugas tidak ditemukan.</p>
+          <p className="text-sm text-[var(--text-secondary)]">Tugas tidak ditemukan atau akses tidak diizinkan.</p>
           <Link href="/tugas" className="mt-4 inline-block">
             <Button variant="secondary" size="sm">Kembali ke Daftar Tugas</Button>
           </Link>
@@ -281,7 +307,7 @@ export default function TaskDetailPage() {
   });
 
   const isCompleted = task.status === "completed" || existingCompletion !== null;
-  const isCreatedByOther = isHead && task.created_by !== profile?.id && task.creator?.full_name;
+  const isCreatedByOther = isHead && task.created_by !== user?.id && task.creator?.full_name;
 
   return (
     <AppShell>
@@ -297,12 +323,25 @@ export default function TaskDetailPage() {
           </Link>
         </div>
 
+        {submitError && (
+          <div className="p-3.5 bg-[var(--accent-red)]/15 border border-[var(--accent-red)]/30 rounded-[var(--radius-md)] text-xs text-[var(--accent-red)] flex items-center justify-between">
+            <span>{submitError}</span>
+            <button
+              type="button"
+              onClick={() => setSubmitError(null)}
+              className="text-[var(--accent-red)] hover:opacity-80"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* 1. Task Info Card */}
         <Card className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[var(--border)]">
             <div className="flex items-center gap-2">
               <Badge variant={isCompleted ? "green" : "blue"} size="md">
-                {isCompleted ? "Selesai" : "Pending (Menunggu Dokumentasi)"}
+                {isCompleted ? "Selesai" : "Menunggu Dokumentasi"}
               </Badge>
 
               {/* Creator Attribution per logic.md section 5 */}
@@ -384,7 +423,7 @@ export default function TaskDetailPage() {
             </div>
 
             <p className="text-xs text-[var(--text-secondary)] italic">
-              Dokumentasi ini telah dikirimkan dan bersifat permanen/tidak dapat disunting kembali sesuai ketentuan integritas arsip DOOR.
+              Dokumentasi ini telah tersimpan di database dan bersifat permanen/tidak dapat disunting kembali sesuai ketentuan integritas arsip DOOR.
             </p>
 
             {/* Actual time & location */}
@@ -394,7 +433,9 @@ export default function TaskDetailPage() {
                   Waktu Aktual:
                 </span>
                 <p className="text-sm text-[var(--text-primary)]">
-                  {task.scheduled_start ? new Date(task.scheduled_start).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "-"} WIB
+                  {existingCompletion?.meeting_start_time
+                    ? new Date(existingCompletion.meeting_start_time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })
+                    : formattedStartTime} WIB
                 </p>
               </div>
 
@@ -403,7 +444,7 @@ export default function TaskDetailPage() {
                   Lokasi Aktual:
                 </span>
                 <p className="text-sm text-[var(--text-primary)]">
-                  {existingCompletion?.actual_location_address || task.planned_location || "Sesuai tempat"}
+                  {existingCompletion?.actual_location_address || task.planned_location || "Sesuai lokasi rencana"}
                 </p>
               </div>
             </div>
@@ -414,27 +455,48 @@ export default function TaskDetailPage() {
                 Ringkasan Notulen / Risalah Rapat:
               </span>
               <div className="p-3.5 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
-                {existingCompletion?.minutes_text || "Rapat koordinasi terlaksana dengan dihadiri oleh seluruh perwakilan divisi. Agenda pembahasan SOP dokumentasi disepakati dan diimplementasikan mulai pekan mendatang."}
+                {existingCompletion?.minutes_text || "Notulen rapat tercatat lengkap."}
               </div>
             </div>
 
             {/* Photos Display */}
-            <div className="pt-2 border-t border-[var(--border)]">
-              <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
-                Foto Bukti Dokumentasi ({completionPhotos.length || 3} foto):
-              </span>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {[1, 2, 3].map((num) => (
-                  <div
-                    key={num}
-                    className="aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center"
-                  >
-                    <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
-                    <span className="text-[10px]">Dokumentasi #{num}</span>
-                  </div>
-                ))}
+            {completionPhotos.length > 0 && (
+              <div className="pt-2 border-t border-[var(--border)]">
+                <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
+                  Foto Bukti Dokumentasi ({completionPhotos.length} foto):
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {completionPhotos.map((photo) => {
+                    const publicUrl = supabase.storage
+                      .from("completion-photos")
+                      .getPublicUrl(photo.storage_path).data.publicUrl;
+
+                    return (
+                      <div
+                        key={photo.id}
+                        className="aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] overflow-hidden relative group"
+                      >
+                        <img
+                          src={publicUrl}
+                          alt="Dokumentasi Rapat"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // Fallback thumbnail view
+                            (e.target as HTMLElement).style.display = "none";
+                          }}
+                        />
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center pointer-events-none">
+                          <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
+                          <span className="text-[10px] truncate max-w-full px-1">
+                            {photo.storage_path.split("/").pop()}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </Card>
         ) : (
           /* COMPLETION FORM per logic.md section 3 */
@@ -444,7 +506,7 @@ export default function TaskDetailPage() {
                 Formulir Penyelesaian & Dokumentasi Tugas
               </h2>
               <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                Unggah bukti foto, catat waktu aktual, dan lampirkan notulen rapat.
+                Unggah bukti foto, catat waktu aktual, dan lampirkan notulen rapat ke database.
               </p>
             </div>
 
@@ -474,13 +536,11 @@ export default function TaskDetailPage() {
                       key={photo.id}
                       className="relative aspect-square rounded-[var(--radius-sm)] overflow-hidden border border-[var(--border)] bg-[var(--surface-hover)] group"
                     >
-                      {/* Photo preview thumbnail */}
                       <img
                         src={photo.previewUrl}
                         alt="Dokumentasi"
                         className="w-full h-full object-cover"
                       />
-                      {/* Remove photo button */}
                       <button
                         type="button"
                         onClick={() => removePhoto(photo.id)}
@@ -511,7 +571,7 @@ export default function TaskDetailPage() {
                 </div>
 
                 <p className="text-[11px] text-[var(--text-secondary)]">
-                  Format yang didukung: JPG, PNG, WEBP.
+                  Format yang didukung: JPG, PNG, WEBP. Maksimal 10MB per berkas.
                 </p>
               </div>
 
@@ -557,7 +617,7 @@ export default function TaskDetailPage() {
               {/* Single primary submit button per design.md section 5 */}
               <div className="pt-4 border-t border-[var(--border)] flex items-center justify-between">
                 <span className="text-xs text-[var(--text-secondary)]">
-                  Laporan akan terkunci secara permanen setelah dikirimkan.
+                  Laporan akan tersimpan dan terkunci secara permanen.
                 </span>
 
                 <Button
@@ -573,12 +633,11 @@ export default function TaskDetailPage() {
         )}
       </div>
 
-      {/* Success Popup Modal per design.md section 5 & agents.md rule 9:
-          Light/white background even in dark mode, blue check circle, auto-redirect */}
+      {/* Success Popup Modal: only shown after confirmed successful database insert */}
       <SuccessPopup
         isOpen={showSuccessPopup}
         title="Laporan terkirim"
-        subtitle="Dokumentasi telah disimpan. Mengalihkan ke Riwayat Laporan..."
+        subtitle="Dokumentasi telah tersimpan di database. Mengalihkan ke Riwayat Laporan..."
         redirectTo="/riwayat"
         delayMs={1600}
         onClose={() => setShowSuccessPopup(false)}

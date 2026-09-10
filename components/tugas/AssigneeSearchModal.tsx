@@ -5,7 +5,6 @@ import { Search, X, Loader2, ChevronLeft, ChevronRight, User } from "lucide-reac
 import { Profile } from "@/types/database";
 import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/Badge";
-import { DEMO_PROFILES } from "@/lib/context/auth-context";
 
 interface AssigneeSearchModalProps {
   isOpen: boolean;
@@ -13,123 +12,6 @@ interface AssigneeSearchModalProps {
   onSelect: (assignee: Profile) => void;
   selectedIds?: string[];
 }
-
-// Sample fallback directory if Supabase profiles table is currently empty
-const SAMPLE_STAFF: Profile[] = [
-  ...Object.values(DEMO_PROFILES),
-  {
-    id: "00000000-0000-0000-0000-000000000010",
-    full_name: "Ahmad Fauzi",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000011",
-    full_name: "Anisa Permata",
-    role: "member",
-    division: "Divisi Kehumasan",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000012",
-    full_name: "Bambang Pamungkas",
-    role: "member",
-    division: "Divisi Umum",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000013",
-    full_name: "Cahyo Utomo",
-    role: "member",
-    division: "Divisi TI & Infrastruktur",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000014",
-    full_name: "Dedi Kusnadi",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000015",
-    full_name: "Dewi Lestari",
-    role: "head",
-    division: "Kepala Sub Bagian Umum",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000016",
-    full_name: "Eko Prasetyo",
-    role: "member",
-    division: "Divisi Perencanaan",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000017",
-    full_name: "Fajar Nugraha",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000018",
-    full_name: "Fitri Handayani",
-    role: "member",
-    division: "Divisi Kehumasan",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000019",
-    full_name: "Gunawan Santoso",
-    role: "member",
-    division: "Divisi Operasional",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000020",
-    full_name: "Hadi Pranoto",
-    role: "member",
-    division: "Divisi Operasional",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000021",
-    full_name: "Slamet Riyadi",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000022",
-    full_name: "Suryanto",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "00000000-0000-0000-0000-000000000023",
-    full_name: "Sari Indah",
-    role: "member",
-    division: "Divisi Kehumasan",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-];
 
 export function AssigneeSearchModal({
   isOpen,
@@ -170,32 +52,26 @@ export function AssigneeSearchModal({
       setIsDebouncing(false);
       setHasQueried(true);
 
-      const q = searchTerm.toLowerCase();
       try {
         const { data, error } = await supabase
           .from("profiles")
           .select("*")
-          .ilike("full_name", `%${searchTerm}%`);
+          .ilike("full_name", `%${searchTerm.trim()}%`);
 
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           setMatchingUsers(data as Profile[]);
         } else {
-          // Fallback to sample staff for offline/initial testing
-          const localFiltered = SAMPLE_STAFF.filter((s) =>
-            (s.full_name || "").toLowerCase().includes(q)
-          );
-          setMatchingUsers(localFiltered);
+          if (error) console.warn("Search profiles error:", error.message);
+          setMatchingUsers([]);
         }
-      } catch {
-        const localFiltered = SAMPLE_STAFF.filter((s) =>
-          (s.full_name || "").toLowerCase().includes(q)
-        );
-        setMatchingUsers(localFiltered);
+      } catch (err) {
+        console.warn("Assignee query error:", err);
+        setMatchingUsers([]);
       }
-    }, 1500); // 1.5s debounce strictly per logic.md
+    }, 1500); // 1.5s debounce strictly per logic.md section 4
 
     return () => clearTimeout(timer);
-  }, [searchTerm]);
+  }, [searchTerm, supabase]);
 
   // Group matching users by first letter (A, B, C...)
   const groupedUsers = useMemo(() => {
@@ -272,7 +148,7 @@ export function AssigneeSearchModal({
             <User className="w-10 h-10 opacity-20 mb-3" />
             <p className="text-sm font-medium">Mulai mengetik untuk mencari nama</p>
             <p className="text-xs text-[var(--text-secondary)]/70 mt-1 max-w-xs">
-              Pencarian akan memuat otomatis 1.5 detik setelah selesai mengetik.
+              Pencarian akan memuat dari database 1.5 detik setelah selesai mengetik.
             </p>
           </div>
         )}
@@ -281,7 +157,7 @@ export function AssigneeSearchModal({
         {isDebouncing && (
           <div className="h-full flex flex-col items-center justify-center text-center py-20">
             <Loader2 className="w-7 h-7 text-[var(--accent-blue)] animate-spin mb-3" />
-            <p className="text-xs text-[var(--text-secondary)]">Mencari nama...</p>
+            <p className="text-xs text-[var(--text-secondary)]">Mencari nama di database...</p>
           </div>
         )}
 
@@ -291,7 +167,7 @@ export function AssigneeSearchModal({
             {Object.keys(groupedUsers).length === 0 ? (
               <div className="text-center py-16 text-[var(--text-secondary)]">
                 <p className="text-sm font-medium">Tidak ada nama yang cocok dengan "{searchTerm}"</p>
-                <p className="text-xs mt-1">Coba gunakan kata kunci nama lain.</p>
+                <p className="text-xs mt-1">Pastikan nama terdaftar pada akun organisasi.</p>
               </div>
             ) : (
               <div className="space-y-6">
@@ -346,14 +222,14 @@ export function AssigneeSearchModal({
 
                       {/* User Items */}
                       <div className="divide-y divide-[var(--border)]">
-                        {pagedUsers.map((user) => {
-                          const isAlreadySelected = selectedIds.includes(user.id);
+                        {pagedUsers.map((itemUser) => {
+                          const isAlreadySelected = selectedIds.includes(itemUser.id);
                           return (
                             <div
-                              key={user.id}
+                              key={itemUser.id}
                               onClick={() => {
                                 if (!isAlreadySelected) {
-                                  onSelect(user);
+                                  onSelect(itemUser);
                                   onClose();
                                 }
                               }}
@@ -365,14 +241,14 @@ export function AssigneeSearchModal({
                             >
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center text-xs font-medium text-[var(--text-secondary)]">
-                                  {(user.full_name || "?").charAt(0).toUpperCase()}
+                                  {(itemUser.full_name || "?").charAt(0).toUpperCase()}
                                 </div>
                                 <div className="flex flex-col">
                                   <span className="text-sm font-medium text-[var(--text-primary)]">
-                                    {user.full_name}
+                                    {itemUser.full_name}
                                   </span>
                                   <span className="text-xs text-[var(--text-secondary)]">
-                                    {user.division || "Umum"}
+                                    {itemUser.division || "Umum"}
                                   </span>
                                 </div>
                               </div>
@@ -380,9 +256,9 @@ export function AssigneeSearchModal({
                               <div className="flex items-center gap-2">
                                 <Badge
                                   size="sm"
-                                  variant={user.role === "head" ? "blue" : "neutral"}
+                                  variant={itemUser.role === "head" ? "blue" : "neutral"}
                                 >
-                                  {user.role === "head" ? "Kepala" : "Anggota"}
+                                  {itemUser.role === "head" ? "Kepala" : "Anggota"}
                                 </Badge>
                                 {isAlreadySelected && (
                                   <span className="text-[11px] text-[var(--text-secondary)] italic">

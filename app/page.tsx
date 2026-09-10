@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   CheckSquare,
@@ -36,89 +36,132 @@ interface ActivityItem {
 }
 
 export default function DashboardPage() {
-  const { profile, isHead, role } = useAuth();
+  const { user, profile, isHead, isLoading: isAuthLoading } = useAuth();
   const supabase = createClient();
 
-  // Initial stats with realistic values
   const [stats, setStats] = useState<StatData>({
-    total: 12,
-    pending: 4,
-    completed: 7,
-    rejected: 1,
+    total: 0,
+    pending: 0,
+    completed: 0,
+    rejected: 0,
   });
 
-  const [activities, setActivities] = useState<ActivityItem[]>([
-    {
-      id: "act-1",
-      title: "Dokumentasi Rapat Koordinasi Wilayah diserahkan",
-      description: "Budi Santoso telah mengunggah notulen dan 4 foto",
-      time: "10 menit yang lalu",
-      type: "completed",
-    },
-    {
-      id: "act-2",
-      title: "Penugasan baru: Sosialisasi Sistem Informasi",
-      description: "Ditugaskan kepada Siti Rahma & Ahmad Fauzi",
-      time: "1 jam yang lalu",
-      type: "assigned",
-    },
-    {
-      id: "act-3",
-      title: "Laporan Evaluasi Bulanan selesai",
-      description: "Hendra Wijaya memverifikasi kelengkapan dokumentasi",
-      time: "3 jam yang lalu",
-      type: "completed",
-    },
-    {
-      id: "act-4",
-      title: "Pengajuan izin diajukan",
-      description: "Eko Prasetyo mengajukan izin cuti 2 hari",
-      time: "Kemarin",
-      type: "izin",
-    },
-  ]);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
 
-  // Supabase Realtime listener for live activity feed per logic.md section 8
+  // Fetch real stats and activities from Supabase
+  const loadDashboardData = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingData(true);
+
+    try {
+      // 1. Query real tasks counts
+      // Supabase RLS automatically scopes tasks:
+      // Heads see all tasks, Members see tasks assigned to them or created by them
+      const { data: tasksData, error: tasksError } = await supabase
+        .from("tasks")
+        .select("id, status, title, created_at");
+
+      let totalTasks = 0;
+      let pendingTasks = 0;
+      let completedTasks = 0;
+
+      if (!tasksError && tasksData) {
+        totalTasks = tasksData.length;
+        pendingTasks = tasksData.filter((t) => t.status === "pending").length;
+        completedTasks = tasksData.filter((t) => t.status === "completed").length;
+      }
+
+      // 2. Query real rejected izin count
+      const { count: rejectedCount } = await supabase
+        .from("pengajuan_izin")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "rejected");
+
+      setStats({
+        total: totalTasks,
+        pending: pendingTasks,
+        completed: completedTasks,
+        rejected: rejectedCount || 0,
+      });
+
+      // 3. Query real activities from notifications or recent tasks
+      const { data: notifData } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(6);
+
+      if (notifData && notifData.length > 0) {
+        const mappedActivities: ActivityItem[] = notifData.map((n) => {
+          const createdAt = new Date(n.created_at);
+          const timeAgo = formatTimeAgo(createdAt);
+          return {
+            id: n.id,
+            title: n.message,
+            description: n.type === "task_assigned" ? "Penugasan baru" : "Notifikasi sistem",
+            time: timeAgo,
+            type: n.type === "task_assigned" ? "assigned" : "completed",
+          };
+        });
+        setActivities(mappedActivities);
+      } else if (tasksData && tasksData.length > 0) {
+        // Map recent tasks into activity feed if notifications are empty
+        const recentTasks = [...tasksData]
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          .slice(0, 5);
+
+        const mapped: ActivityItem[] = recentTasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          description: t.status === "completed" ? "Tugas telah selesai didokumentasikan" : "Tugas menunggu dokumentasi",
+          time: formatTimeAgo(new Date(t.created_at)),
+          type: t.status === "completed" ? "completed" : "assigned",
+        }));
+        setActivities(mapped);
+      } else {
+        setActivities([]);
+      }
+    } catch (err) {
+      console.warn("Failed to load dashboard data from Supabase:", err);
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [user, supabase]);
+
   useEffect(() => {
+    if (user) {
+      loadDashboardData();
+    }
+  }, [user, loadDashboardData]);
+
+  // Realtime subscription for live dashboard updates
+  useEffect(() => {
+    if (!user) return;
+
     try {
       const channel = supabase
         .channel("realtime_dashboard_activity")
         .on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "notifications" },
-          (payload) => {
-            const newNotif = payload.new as any;
-            setActivities((prev) => [
-              {
-                id: newNotif.id || Date.now().toString(),
-                title: newNotif.message || "Aktivitas baru diterima",
-                description: "Pembaruan langsung dari sistem",
-                time: "Baru saja",
-                type: "assigned",
-              },
-              ...prev.slice(0, 7),
-            ]);
+          { event: "*", schema: "public", table: "tasks" },
+          () => {
+            loadDashboardData();
           }
         )
         .on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "task_completions" },
+          { event: "*", schema: "public", table: "task_completions" },
           () => {
-            setStats((prev) => ({
-              ...prev,
-              pending: Math.max(0, prev.pending - 1),
-              completed: prev.completed + 1,
-            }));
-            setActivities((prev) => [
-              {
-                id: Date.now().toString(),
-                title: "Laporan tugas baru telah dikirimkan",
-                description: "Dokumentasi rapat telah selesai diunggah",
-                time: "Baru saja",
-                type: "completed",
-              },
-              ...prev.slice(0, 7),
-            ]);
+            loadDashboardData();
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "notifications" },
+          () => {
+            loadDashboardData();
           }
         )
         .subscribe();
@@ -127,14 +170,14 @@ export default function DashboardPage() {
         supabase.removeChannel(channel);
       };
     } catch {
-      // Supabase realtime fallback
+      // ignore
     }
-  }, [supabase]);
+  }, [user, supabase, loadDashboardData]);
 
-  const totalCalculated = Math.max(1, stats.total);
-  const pendingPct = Math.round((stats.pending / totalCalculated) * 100);
-  const completedPct = Math.round((stats.completed / totalCalculated) * 100);
-  const rejectedPct = Math.round((stats.rejected / totalCalculated) * 100);
+  const totalCalculated = stats.total > 0 ? stats.total : 1;
+  const pendingPct = stats.total > 0 ? Math.round((stats.pending / totalCalculated) * 100) : 0;
+  const completedPct = stats.total > 0 ? Math.round((stats.completed / totalCalculated) * 100) : 0;
+  const rejectedPct = stats.total > 0 ? Math.round((stats.rejected / totalCalculated) * 100) : 0;
 
   return (
     <AppShell>
@@ -148,7 +191,7 @@ export default function DashboardPage() {
             <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-1">
               Selamat datang kembali,{" "}
               <span className="text-[var(--text-primary)] font-medium">
-                {profile?.full_name || "Pengguna"}
+                {profile?.full_name || (isAuthLoading ? "Memuat..." : "Pengguna")}
               </span>{" "}
               ({isHead ? "Kepala / Head" : "Anggota / Member"}) — {profile?.division || "Divisi Operasional"}
             </p>
@@ -181,10 +224,10 @@ export default function DashboardPage() {
             </div>
             <div className="mt-3">
               <span className="text-xl sm:text-3xl font-semibold text-[var(--text-primary)] leading-none">
-                {stats.total}
+                {isLoadingData ? "..." : stats.total}
               </span>
               <p className="text-[11px] text-[var(--text-secondary)] mt-1 truncate">
-                {isHead ? "Semua penugasan divisi" : "Tugas yang ditugaskan ke Anda"}
+                {isHead ? "Semua penugasan organisasi" : "Tugas yang ditugaskan ke Anda"}
               </p>
             </div>
           </Card>
@@ -199,7 +242,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-3">
               <span className="text-xl sm:text-3xl font-semibold text-[var(--accent-orange)] leading-none">
-                {stats.pending}
+                {isLoadingData ? "..." : stats.pending}
               </span>
               <p className="text-[11px] text-[var(--text-secondary)] mt-1 truncate">
                 Menunggu dokumentasi
@@ -217,7 +260,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-3">
               <span className="text-xl sm:text-3xl font-semibold text-[var(--status-success)] leading-none">
-                {stats.completed}
+                {isLoadingData ? "..." : stats.completed}
               </span>
               <p className="text-[11px] text-[var(--text-secondary)] mt-1 truncate">
                 Terdokumentasi lengkap
@@ -235,7 +278,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-3">
               <span className="text-xl sm:text-3xl font-semibold text-[var(--accent-red)] leading-none">
-                {stats.rejected}
+                {isLoadingData ? "..." : stats.rejected}
               </span>
               <p className="text-[11px] text-[var(--text-secondary)] mt-1 truncate">
                 Izin tidak disetujui
@@ -244,7 +287,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        {/* Panels: Status Breakdown + Recent Activity (Side-by-side desktop, stacked mobile per design.md) */}
+        {/* Panels: Status Breakdown + Recent Activity */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Status Breakdown Widget (5 cols desktop) */}
           <Card className="lg:col-span-5 flex flex-col justify-between">
@@ -261,7 +304,7 @@ export default function DashboardPage() {
                 <Badge variant="blue">{stats.total} Total</Badge>
               </div>
 
-              {/* Progress bars (6px per design.md section 5) */}
+              {/* Progress bars */}
               <div className="space-y-4 py-2">
                 <ProgressBar
                   label="Selesai (Terdokumentasi)"
@@ -315,36 +358,42 @@ export default function DashboardPage() {
             </div>
 
             {/* Activity List */}
-            <div className="divide-y divide-[var(--border)] flex-1 overflow-hidden">
-              {activities.map((item) => (
-                <div
-                  key={item.id}
-                  className="py-3 flex items-start gap-3 transition-colors hover:bg-[var(--surface-hover)]/30 px-2 rounded-[var(--radius-sm)]"
-                >
-                  <div className="mt-0.5 w-7 h-7 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
-                    {item.type === "completed" ? (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)]" />
-                    ) : item.type === "izin" ? (
-                      <Calendar className="w-3.5 h-3.5 text-[var(--accent-orange)]" />
-                    ) : (
-                      <FileText className="w-3.5 h-3.5 text-[var(--accent-blue)]" />
-                    )}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-[var(--text-primary)] truncate">
-                      {item.title}
-                    </p>
-                    <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">
-                      {item.description}
-                    </p>
-                  </div>
-
-                  <span className="text-[10px] text-[var(--text-secondary)] shrink-0 mt-0.5">
-                    {item.time}
-                  </span>
+            <div className="divide-y divide-[var(--border)] flex-1 overflow-hidden min-h-[160px]">
+              {activities.length === 0 ? (
+                <div className="py-12 text-center text-xs text-[var(--text-secondary)]">
+                  Belum ada aktivitas terbaru yang tercatat di sistem.
                 </div>
-              ))}
+              ) : (
+                activities.map((item) => (
+                  <div
+                    key={item.id}
+                    className="py-3 flex items-start gap-3 transition-colors hover:bg-[var(--surface-hover)]/30 px-2 rounded-[var(--radius-sm)]"
+                  >
+                    <div className="mt-0.5 w-7 h-7 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
+                      {item.type === "completed" ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)]" />
+                      ) : item.type === "izin" ? (
+                        <Calendar className="w-3.5 h-3.5 text-[var(--accent-orange)]" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-[var(--accent-blue)]" />
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-[var(--text-primary)] truncate">
+                        {item.title}
+                      </p>
+                      <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">
+                        {item.description}
+                      </p>
+                    </div>
+
+                    <span className="text-[10px] text-[var(--text-secondary)] shrink-0 mt-0.5">
+                      {item.time}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
@@ -363,4 +412,18 @@ export default function DashboardPage() {
       </div>
     </AppShell>
   );
+}
+
+function formatTimeAgo(date: Date): string {
+  const diffMs = Date.now() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffMin < 1) return "Baru saja";
+  if (diffMin < 60) return `${diffMin} menit yang lalu`;
+  if (diffHour < 24) return `${diffHour} jam yang lalu`;
+  if (diffDay === 1) return "Kemarin";
+  return `${diffDay} hari yang lalu`;
 }

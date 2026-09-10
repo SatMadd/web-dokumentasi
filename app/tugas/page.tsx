@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   Calendar,
@@ -9,133 +9,66 @@ import {
   Plus,
   Search,
   User,
-  CheckCircle2,
-  AlertCircle,
-  ArrowRight,
   CheckSquare,
+  ArrowRight,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { useAuth, DEMO_PROFILES } from "@/lib/context/auth-context";
+import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
 import { Task } from "@/types/database";
 
-// Seeded tasks for demo/testing
-const SAMPLE_TASKS: Task[] = [
-  {
-    id: "task-101",
-    title: "Rapat Koordinasi Penataan Arsip & Dokumentasi Semester I",
-    created_by: DEMO_PROFILES.head.id,
-    planned_location: "Ruang Rapat Utama Lantai 3, Gedung Pengelola",
-    planned_location_lat: -6.2088,
-    planned_location_lng: 106.8456,
-    scheduled_start: "2026-09-12T09:00:00Z",
-    scheduled_end: "2026-09-12T11:30:00Z",
-    status: "pending",
-    created_at: "2026-09-08T08:00:00Z",
-    creator: DEMO_PROFILES.head,
-    assignees: [
-      {
-        task_id: "task-101",
-        user_id: DEMO_PROFILES.member1.id,
-        assigned_at: "2026-09-08T08:00:00Z",
-        profile: DEMO_PROFILES.member1,
-      },
-    ],
-  },
-  {
-    id: "task-102",
-    title: "Pendataan & Dokumentasi Infrastruktur Lapangan Wilayah Barat",
-    created_by: DEMO_PROFILES.head2.id, // Created by another Head!
-    planned_location: "Balai Warga Kelurahan Menteng",
-    planned_location_lat: -6.1955,
-    planned_location_lng: 106.8322,
-    scheduled_start: "2026-09-14T13:00:00Z",
-    scheduled_end: "2026-09-14T16:00:00Z",
-    status: "pending",
-    created_at: "2026-09-09T09:30:00Z",
-    creator: DEMO_PROFILES.head2,
-    assignees: [
-      {
-        task_id: "task-102",
-        user_id: DEMO_PROFILES.member1.id,
-        assigned_at: "2026-09-09T09:30:00Z",
-        profile: DEMO_PROFILES.member1,
-      },
-      {
-        task_id: "task-102",
-        user_id: DEMO_PROFILES.head.id,
-        assigned_at: "2026-09-09T09:30:00Z",
-        profile: DEMO_PROFILES.head,
-      },
-    ],
-  },
-  {
-    id: "task-103",
-    title: "Sosialisasi Standar Operasional Dokumentasi Digital",
-    created_by: DEMO_PROFILES.head.id,
-    planned_location: "Aula Serbaguna Lantai 1",
-    planned_location_lat: -6.2100,
-    planned_location_lng: 106.8400,
-    scheduled_start: "2026-09-05T08:30:00Z",
-    scheduled_end: "2026-09-05T11:00:00Z",
-    status: "completed",
-    created_at: "2026-09-01T07:00:00Z",
-    creator: DEMO_PROFILES.head,
-    assignees: [
-      {
-        task_id: "task-103",
-        user_id: DEMO_PROFILES.member1.id,
-        assigned_at: "2026-09-01T07:00:00Z",
-        profile: DEMO_PROFILES.member1,
-      },
-    ],
-  },
-];
-
 export default function TugasPage() {
-  const { profile, isHead, role } = useAuth();
+  const { user, profile, isHead } = useAuth();
   const supabase = createClient();
 
   // Head-specific dual view switch per logic.md section 5:
   // "Tugas" (tasks assigned to Head themself) vs "Penugasan" (tasks Head assigned to others)
   const [headViewTab, setHeadViewTab] = useState<"tugas" | "penugasan">("penugasan");
   const [searchQuery, setSearchQuery] = useState("");
-  const [tasks, setTasks] = useState<Task[]>(SAMPLE_TASKS);
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true);
+
+  const fetchTasks = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingTasks(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("tasks")
+        .select(`
+          *,
+          creator:profiles!tasks_created_by_fkey(*),
+          assignees:task_assignees(
+            user_id,
+            profile:profiles(*)
+          )
+        `)
+        .order("scheduled_start", { ascending: false });
+
+      if (!error && data) {
+        setTasks(data as any);
+      } else if (error) {
+        console.warn("Fetch tasks error:", error.message);
+        setTasks([]);
+      }
+    } catch (err) {
+      console.warn("Exception fetching tasks:", err);
+      setTasks([]);
+    } finally {
+      setIsLoadingTasks(false);
+    }
+  }, [user, supabase]);
 
   useEffect(() => {
-    const fetchTasks = async () => {
-      setIsLoadingTasks(true);
-      try {
-        const { data, error } = await supabase
-          .from("tasks")
-          .select(`
-            *,
-            creator:profiles!tasks_created_by_fkey(*),
-            assignees:task_assignees(
-              user_id,
-              profile:profiles(*)
-            )
-          `)
-          .order("scheduled_start", { ascending: false });
+    if (user) {
+      fetchTasks();
+    }
+  }, [user, fetchTasks]);
 
-        if (!error && data && data.length > 0) {
-          setTasks(data as any);
-        }
-      } catch {
-        // Fallback to SAMPLE_TASKS
-      } finally {
-        setIsLoadingTasks(false);
-      }
-    };
-
-    fetchTasks();
-  }, [supabase]);
-
-  // Filter tasks based on role and tab
+  // Filter tasks based on role, tab, and search query
   const filteredTasks = tasks.filter((task) => {
     const matchesSearch =
       task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -143,25 +76,21 @@ export default function TugasPage() {
 
     if (!matchesSearch) return false;
 
-    const currentUserId = profile?.id || "";
+    const currentUserId = user?.id || "";
 
     if (isHead) {
       if (headViewTab === "tugas") {
         // Tasks where Head is an assignee (as a doer)
-        return (
-          task.assignees?.some((a) => a.user_id === currentUserId) ||
-          task.created_by === currentUserId // Fallback visibility
-        );
+        return task.assignees?.some((a) => a.user_id === currentUserId);
       } else {
-        // "Penugasan" tab: tasks created by this Head or monitored by oversight
+        // "Penugasan" tab: all tasks visible to Head
         return true;
       }
     } else {
-      // Member can only see tasks assigned to them per logic.md & schema.md
+      // Member view: RLS already restricts to assigned tasks, but we ensure client filter too
       return (
         task.assignees?.some((a) => a.user_id === currentUserId) ||
-        // If demo profile id matches
-        currentUserId === DEMO_PROFILES.member1.id
+        task.created_by === currentUserId
       );
     }
   });
@@ -238,14 +167,18 @@ export default function TugasPage() {
         </div>
 
         {/* Tasks List */}
-        {filteredTasks.length === 0 ? (
+        {isLoadingTasks ? (
+          <div className="py-16 text-center text-xs text-[var(--text-secondary)]">
+            Memuat daftar tugas dari database...
+          </div>
+        ) : filteredTasks.length === 0 ? (
           <Card className="text-center py-16 text-[var(--text-secondary)]">
             <CheckSquare className="w-12 h-12 opacity-20 mx-auto mb-3" />
             <p className="text-sm font-medium">Tidak ada tugas ditemukan</p>
             <p className="text-xs mt-1">
               {searchQuery
                 ? "Coba kata kunci pencarian yang lain."
-                : "Belum ada penugasan aktif saat ini."}
+                : "Belum ada penugasan aktif di sistem."}
             </p>
           </Card>
         ) : (
@@ -266,7 +199,7 @@ export default function TugasPage() {
               // Creator Attribution check per logic.md section 5:
               // Whenever a Head views a task created by someone else, visibly display "Dibuat oleh [name]"
               const isCreatedByOther =
-                isHead && task.created_by !== profile?.id && task.creator?.full_name;
+                isHead && task.created_by !== user?.id && task.creator?.full_name;
 
               return (
                 <Link key={task.id} href={`/tugas/${task.id}`}>
@@ -320,7 +253,7 @@ export default function TugasPage() {
                       <div className="flex items-center gap-1.5 text-[var(--text-secondary)]">
                         <User className="w-3.5 h-3.5" />
                         <span>
-                          {task.assignees?.length || 1} pelaksana ditugaskan
+                          {task.assignees?.length || 0} pelaksana ditugaskan
                         </span>
                       </div>
 

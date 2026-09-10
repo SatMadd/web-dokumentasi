@@ -2,44 +2,9 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { User } from "@supabase/supabase-js";
+import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Profile, UserRole } from "@/types/database";
-
-// Predefined demo profiles for quick testing/fallback
-export const DEMO_PROFILES: Record<string, Profile> = {
-  head: {
-    id: "00000000-0000-0000-0000-000000000001",
-    full_name: "Suprapto (Kepala Bagian)",
-    role: "head",
-    division: "Bagian Operasional & Perencanaan",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  member1: {
-    id: "00000000-0000-0000-0000-000000000002",
-    full_name: "Budi Santoso",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  member2: {
-    id: "00000000-0000-0000-0000-000000000003",
-    full_name: "Siti Rahma",
-    role: "member",
-    division: "Divisi Dokumentasi & Acara",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-  head2: {
-    id: "00000000-0000-0000-0000-000000000004",
-    full_name: "Hendra Wijaya (Kepala Divisi)",
-    role: "head",
-    division: "Divisi TI & Infrastruktur",
-    avatar_url: null,
-    created_at: new Date().toISOString(),
-  },
-};
 
 interface AuthContextType {
   user: User | null;
@@ -47,9 +12,7 @@ interface AuthContextType {
   role: UserRole;
   isHead: boolean;
   isLoading: boolean;
-  isDemoMode: boolean;
   signOut: () => Promise<void>;
-  switchDemoUser: (key: "head" | "member1" | "member2" | "head2") => void;
   refreshProfile: () => Promise<void>;
 }
 
@@ -57,71 +20,74 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(DEMO_PROFILES.head);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isDemoMode, setIsDemoMode] = useState(false);
 
+  const router = useRouter();
+  const pathname = usePathname();
   const supabase = createClient();
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string): Promise<Profile | null> => {
     try {
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
-        console.warn("Could not fetch profile from Supabase:", error.message);
+        console.warn("Error fetching user profile:", error.message);
         return null;
       }
-      return data as Profile;
+      return data as Profile | null;
     } catch {
       return null;
     }
   };
 
   useEffect(() => {
-    const checkUser = async () => {
+    let isMounted = true;
+
+    const initializeAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) {
+          console.warn("Session error:", error.message);
+        }
+
         if (session?.user) {
-          setUser(session.user);
-          const userProfile = await fetchProfile(session.user.id);
-          if (userProfile) {
-            setProfile(userProfile);
-            setIsDemoMode(false);
-          } else {
-            // Default profile from session metadata
-            const fallback: Profile = {
-              id: session.user.id,
-              full_name: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "User",
-              role: (session.user.user_metadata?.role as UserRole) || "member",
-              division: session.user.user_metadata?.division || "Umum",
-              avatar_url: null,
-              created_at: new Date().toISOString(),
-            };
-            setProfile(fallback);
+          if (isMounted) setUser(session.user);
+          const p = await fetchProfile(session.user.id);
+          if (isMounted) {
+            if (p) {
+              setProfile(p);
+            } else {
+              // Construct profile from user metadata if profiles row is not yet queried
+              const meta = session.user.user_metadata || {};
+              setProfile({
+                id: session.user.id,
+                full_name: meta.full_name || session.user.email?.split("@")[0] || "Pengguna",
+                role: (meta.role as UserRole) || "member",
+                division: meta.division || "Umum",
+                avatar_url: meta.avatar_url || null,
+                created_at: session.user.created_at || new Date().toISOString(),
+              });
+            }
           }
         } else {
-          // Check if user set a demo preference in localStorage
-          const savedDemo = localStorage.getItem("door_demo_user");
-          if (savedDemo && DEMO_PROFILES[savedDemo]) {
-            setProfile(DEMO_PROFILES[savedDemo]);
-          } else {
-            setProfile(DEMO_PROFILES.head);
+          if (isMounted) {
+            setUser(null);
+            setProfile(null);
           }
-          setIsDemoMode(true);
         }
       } catch (err) {
-        console.error("Auth initialization error:", err);
-        setIsDemoMode(true);
+        console.error("Auth init exception:", err);
       } finally {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
     };
 
-    checkUser();
+    initializeAuth();
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
@@ -130,37 +96,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const p = await fetchProfile(session.user.id);
           if (p) {
             setProfile(p);
-            setIsDemoMode(false);
+          } else {
+            const meta = session.user.user_metadata || {};
+            setProfile({
+              id: session.user.id,
+              full_name: meta.full_name || session.user.email?.split("@")[0] || "Pengguna",
+              role: (meta.role as UserRole) || "member",
+              division: meta.division || "Umum",
+              avatar_url: meta.avatar_url || null,
+              created_at: session.user.created_at || new Date().toISOString(),
+            });
           }
-        } else if (!isDemoMode) {
+        } else {
           setUser(null);
+          setProfile(null);
         }
+        setIsLoading(false);
       }
     );
 
     return () => {
+      isMounted = false;
       authListener.subscription.unsubscribe();
     };
   }, []);
 
-  const switchDemoUser = (key: "head" | "member1" | "member2" | "head2") => {
-    if (DEMO_PROFILES[key]) {
-      setProfile(DEMO_PROFILES[key]);
-      localStorage.setItem("door_demo_user", key);
-      setIsDemoMode(true);
+  // Route protection: redirect unauthenticated users to /login
+  useEffect(() => {
+    if (!isLoading && !user && pathname !== "/login") {
+      router.replace("/login");
     }
-  };
+  }, [isLoading, user, pathname, router]);
 
   const signOut = async () => {
     try {
       await supabase.auth.signOut();
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("SignOut error:", err);
     }
     setUser(null);
-    setProfile(DEMO_PROFILES.member1);
-    localStorage.setItem("door_demo_user", "member1");
-    setIsDemoMode(true);
+    setProfile(null);
+    router.replace("/login");
   };
 
   const refreshProfile = async () => {
@@ -181,9 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role,
         isHead,
         isLoading,
-        isDemoMode,
         signOut,
-        switchDemoUser,
         refreshProfile,
       }}
     >

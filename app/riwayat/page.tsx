@@ -1,125 +1,119 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   FileText,
-  Calendar,
   Clock,
   MapPin,
   Camera,
   User,
   Search,
-  ExternalLink,
   CheckCircle2,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { useAuth, DEMO_PROFILES } from "@/lib/context/auth-context";
+import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
 
-interface ReportItem {
+interface FullCompletion {
   id: string;
-  taskId: string;
-  title: string;
-  submitterName: string;
-  submitterRole: "head" | "member";
-  submitterDivision: string;
-  submittedAt: string;
-  meetingDate: string;
-  location: string;
-  minutesSnippet: string;
-  photoCount: number;
+  task_id: string;
+  submitted_by: string;
+  minutes_text: string | null;
+  meeting_start_time: string | null;
+  meeting_end_time: string | null;
+  actual_location_lat: number | null;
+  actual_location_lng: number | null;
+  actual_location_address: string | null;
+  created_at: string;
+  task?: {
+    id: string;
+    title: string;
+    scheduled_start: string;
+  } | null;
+  submitter?: {
+    id: string;
+    full_name: string | null;
+    role: string;
+    division: string | null;
+  } | null;
+  photos?: {
+    id: string;
+    storage_path: string;
+  }[];
 }
 
-const SAMPLE_REPORTS: ReportItem[] = [
-  {
-    id: "rep-1",
-    taskId: "task-103",
-    title: "Sosialisasi Standar Operasional Dokumentasi Digital",
-    submitterName: DEMO_PROFILES.member1.full_name || "Budi Santoso",
-    submitterRole: "member",
-    submitterDivision: "Divisi Dokumentasi & Acara",
-    submittedAt: "2026-09-05T12:00:00Z",
-    meetingDate: "5 Sep 2026, 08:30 WIB",
-    location: "Aula Serbaguna Lantai 1",
-    minutesSnippet: "Sosialisasi SOP baru mengenai pengambilan foto rapat dan tata cara input lokasi digital telah dipaparkan kepada seluruh staf.",
-    photoCount: 4,
-  },
-  {
-    id: "rep-2",
-    taskId: "task-99",
-    title: "Rapat Pleno Sinkronisasi Data Kepegawaian",
-    submitterName: DEMO_PROFILES.head.full_name || "Suprapto (Kepala)",
-    submitterRole: "head",
-    submitterDivision: "Bagian Operasional & Perencanaan",
-    submittedAt: "2026-09-02T15:30:00Z",
-    meetingDate: "2 Sep 2026, 10:00 WIB",
-    location: "Ruang Komite Bersama",
-    minutesSnippet: "Penyelarasan nomor induk dan integrasi database kepegawaian internal. Seluruh berkas fisik telah diarsipkan.",
-    photoCount: 3,
-  },
-  {
-    id: "rep-3",
-    taskId: "task-98",
-    title: "Koordinasi Teknis Jaringan & Server Cadangan",
-    submitterName: "Hendra Wijaya (Kepala Divisi)",
-    submitterRole: "head",
-    submitterDivision: "Divisi TI & Infrastruktur",
-    submittedAt: "2026-08-28T16:00:00Z",
-    meetingDate: "28 Ags 2026, 13:30 WIB",
-    location: "Pusat Data Lt. Dasar",
-    minutesSnippet: "Pemeriksaan rutin UPS dan switch cadangan. Kapasitas penyimpanan aman untuk 6 bulan ke depan.",
-    photoCount: 5,
-  },
-  {
-    id: "rep-4",
-    taskId: "task-97",
-    title: "Monitoring Layanan Publik Terpadu",
-    submitterName: DEMO_PROFILES.member2.full_name || "Siti Rahma",
-    submitterRole: "member",
-    submitterDivision: "Divisi Dokumentasi & Acara",
-    submittedAt: "2026-08-20T11:00:00Z",
-    meetingDate: "20 Ags 2026, 09:00 WIB",
-    location: "Loket Pelayanan Publik",
-    minutesSnippet: "Pencatatan waktu antrean dan respon kepuasan masyarakat. Indeks pelayanan mencapai skor 92%.",
-    photoCount: 6,
-  },
-];
-
 export default function RiwayatPage() {
-  const { profile, isHead, role } = useAuth();
+  const { user, profile, isHead } = useAuth();
   const supabase = createClient();
 
   // Basic own-vs-all scoping per logic.md section 5:
   // Heads can toggle between "Riwayat Anda" and "Riwayat Anggota" (all). Members see own only.
   const [headScopeTab, setHeadScopeTab] = useState<"own" | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [reports, setReports] = useState<ReportItem[]>(SAMPLE_REPORTS);
-  const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
+  const [completions, setCompletions] = useState<FullCompletion[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Filter reports
-  const filteredReports = reports.filter((r) => {
+  const fetchCompletions = useCallback(async () => {
+    if (!user) return;
+    setIsLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("task_completions")
+        .select(`
+          *,
+          task:tasks(id, title, scheduled_start),
+          submitter:profiles!task_completions_submitted_by_fkey(id, full_name, role, division),
+          photos:completion_photos(id, storage_path)
+        `)
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setCompletions(data as any);
+      } else {
+        if (error) console.warn("Fetch completions error:", error.message);
+        setCompletions([]);
+      }
+    } catch (err) {
+      console.warn("Exception fetching completions:", err);
+      setCompletions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, supabase]);
+
+  useEffect(() => {
+    if (user) {
+      fetchCompletions();
+    }
+  }, [user, fetchCompletions]);
+
+  // Filter completions based on role and tab
+  const filteredCompletions = completions.filter((item) => {
+    const title = item.task?.title || "Tugas Tanpa Judul";
+    const submitterName = item.submitter?.full_name || "Petugas";
+    const location = item.actual_location_address || "";
+
     const matchesSearch =
-      r.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.submitterName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.location.toLowerCase().includes(searchQuery.toLowerCase());
+      title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      submitterName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      location.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (!matchesSearch) return false;
 
     if (isHead) {
       if (headScopeTab === "own") {
-        // "Riwayat Anda": submitted by Head themself
-        return r.submitterRole === "head" && (r.submitterName.includes("Suprapto") || r.submitterName === profile?.full_name);
+        return item.submitted_by === user?.id;
       } else {
-        // "Riwayat Anggota": all completions across the team
         return true;
       }
     } else {
-      // Member can ONLY see their own reports
-      return r.submitterName === (profile?.full_name || "Budi Santoso");
+      // Member can only see their own completions (RLS also guarantees this)
+      return item.submitted_by === user?.id;
     }
   });
 
@@ -188,80 +182,97 @@ export default function RiwayatPage() {
         </div>
 
         {/* Reports Grid */}
-        {filteredReports.length === 0 ? (
+        {isLoading ? (
+          <div className="py-16 text-center text-xs text-[var(--text-secondary)]">
+            Memuat arsip laporan dari database...
+          </div>
+        ) : filteredCompletions.length === 0 ? (
           <Card className="text-center py-16 text-[var(--text-secondary)]">
             <FileText className="w-12 h-12 opacity-20 mx-auto mb-3" />
             <p className="text-sm font-medium">Tidak ada riwayat laporan ditemukan</p>
             <p className="text-xs mt-1">
               {searchQuery
                 ? "Coba kata kunci pencarian yang lain."
-                : "Belum ada laporan yang diserahkan pada kategori ini."}
+                : "Belum ada laporan penyelesaian yang tersimpan di sistem."}
             </p>
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredReports.map((report) => (
-              <Card
-                key={report.id}
-                className="flex flex-col justify-between hover:border-[var(--accent-blue)]/50 transition-colors"
-              >
-                <div>
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--border)]">
-                    <span className="text-[11px] text-[var(--text-secondary)]">
-                      {new Date(report.submittedAt).toLocaleDateString("id-ID", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })}
-                    </span>
-                    <Badge variant="green" size="sm">
-                      Terdokumentasi
-                    </Badge>
-                  </div>
+            {filteredCompletions.map((comp) => {
+              const taskTitle = comp.task?.title || "Penugasan Dokumentasi";
+              const submitterName = comp.submitter?.full_name || "Petugas";
+              const submittedDate = new Date(comp.created_at).toLocaleDateString("id-ID", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              });
+              const meetingTime = comp.meeting_start_time
+                ? new Date(comp.meeting_start_time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB"
+                : "-";
 
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)] line-clamp-2">
-                    {report.title}
-                  </h3>
-
-                  {/* Metadata */}
-                  <div className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
-                    <div className="flex items-center gap-2">
-                      <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                      <span className="truncate">
-                        Diserahkan oleh: <strong className="text-[var(--text-primary)] font-medium">{report.submitterName}</strong>
+              return (
+                <Card
+                  key={comp.id}
+                  className="flex flex-col justify-between hover:border-[var(--accent-blue)]/50 transition-colors"
+                >
+                  <div>
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--border)]">
+                      <span className="text-[11px] text-[var(--text-secondary)]">
+                        {submittedDate}
                       </span>
+                      <Badge variant="green" size="sm">
+                        Terdokumentasi
+                      </Badge>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                      <span>{report.meetingDate}</span>
+
+                    <h3 className="text-sm font-semibold text-[var(--text-primary)] line-clamp-2">
+                      {taskTitle}
+                    </h3>
+
+                    {/* Metadata */}
+                    <div className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
+                      <div className="flex items-center gap-2">
+                        <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                        <span className="truncate">
+                          Diserahkan oleh: <strong className="text-[var(--text-primary)] font-medium">{submitterName}</strong>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                        <span>Pukul {meetingTime}</span>
+                      </div>
+                      {comp.actual_location_address && (
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
+                          <span className="truncate">{comp.actual_location_address}</span>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
-                      <span className="truncate">{report.location}</span>
-                    </div>
+
+                    {/* Minutes Snippet */}
+                    {comp.minutes_text && (
+                      <p className="mt-3 text-xs text-[var(--text-secondary)] line-clamp-2 bg-[var(--surface-hover)]/60 p-2 rounded-[var(--radius-sm)] italic">
+                        "{comp.minutes_text}"
+                      </p>
+                    )}
                   </div>
 
-                  {/* Minutes Snippet */}
-                  <p className="mt-3 text-xs text-[var(--text-secondary)] line-clamp-2 bg-[var(--surface-hover)]/60 p-2 rounded-[var(--radius-sm)] italic">
-                    "{report.minutesSnippet}"
-                  </p>
-                </div>
+                  {/* Footer */}
+                  <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
+                    <div className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{comp.photos?.length || 0} Foto</span>
+                    </div>
 
-                {/* Footer */}
-                <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
-                  <div className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>{report.photoCount} Foto</span>
+                    <Link href={`/tugas/${comp.task_id}`}>
+                      <Button variant="ghost" size="sm" className="text-xs">
+                        Lihat Laporan Lengkap →
+                      </Button>
+                    </Link>
                   </div>
-
-                  <Link href={`/tugas/${report.taskId}`}>
-                    <Button variant="ghost" size="sm" className="text-xs">
-                      Lihat Laporan Lengkap →
-                    </Button>
-                  </Link>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
