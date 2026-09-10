@@ -100,9 +100,19 @@ export default function DashboardPage() {
           return {
             id: n.id,
             title: n.message,
-            description: n.type === "task_assigned" ? "Penugasan baru" : "Notifikasi sistem",
+            description:
+              n.category === "task"
+                ? "Penugasan baru"
+                : n.detail === "approved"
+                ? "Permohonan izin disetujui"
+                : "Permohonan izin ditolak",
             time: timeAgo,
-            type: n.type === "task_assigned" ? "assigned" : "completed",
+            type:
+              n.category === "task"
+                ? "assigned"
+                : n.detail === "approved"
+                ? "completed"
+                : "izin",
           };
         });
         setActivities(mappedActivities);

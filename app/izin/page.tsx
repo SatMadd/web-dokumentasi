@@ -23,9 +23,9 @@ export default function IzinPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const fetchIzin = useCallback(async () => {
+  const fetchIzin = useCallback(async (showLoading = true) => {
     if (!user) return;
-    setIsLoading(true);
+    if (showLoading) setIsLoading(true);
 
     try {
       const { data, error } = await supabase
@@ -44,15 +44,57 @@ export default function IzinPage() {
     } catch {
       setIzinList([]);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   }, [user, supabase]);
 
   useEffect(() => {
-    if (user) {
-      fetchIzin();
-    }
-  }, [user, fetchIzin]);
+    if (!user) return;
+
+    fetchIzin(true);
+
+    // Set up Realtime channel on pengajuan_izin per logic.md section 6:
+    // - For Member: scoped to their own user_id
+    // - For Head: unfiltered (RLS SELECT permits seeing all rows)
+    const channelName = isHead
+      ? `realtime:pengajuan_izin:head`
+      : `realtime:pengajuan_izin:member:${user.id}`;
+
+    const channel = isHead
+      ? supabase
+          .channel(channelName)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "pengajuan_izin",
+            },
+            () => {
+              fetchIzin(false);
+            }
+          )
+          .subscribe()
+      : supabase
+          .channel(channelName)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "pengajuan_izin",
+              filter: `user_id=eq.${user.id}`,
+            },
+            () => {
+              fetchIzin(false);
+            }
+          )
+          .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, isHead, fetchIzin, supabase]);
 
   const handleSubmitIzin = async (e: React.FormEvent) => {
     e.preventDefault();

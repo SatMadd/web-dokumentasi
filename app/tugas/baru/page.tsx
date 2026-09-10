@@ -184,7 +184,8 @@ export default function CreateTaskPage() {
       // 3. Trigger notification for each assignee
       const notifInserts = validAssignees.map((a) => ({
         user_id: a.id,
-        type: "task_assigned",
+        category: "task",
+        detail: "assigned",
         reference_id: createdTaskId,
         message: `Anda telah ditugaskan ke: ${title.trim()}`,
         is_read: false,

@@ -78,12 +78,17 @@ export interface PengajuanIzin {
   reviewer?: Profile | null;
 }
 
+export type NotificationCategory = "task" | "izin";
+export type NotificationDetail = "assigned" | "approved" | "rejected";
+
 export interface Notification {
   id: string;
   user_id: string;
-  type: string;
+  category: NotificationCategory;
+  detail: NotificationDetail;
   reference_id: string;
   message: string;
   is_read: boolean;
   created_at: string;
 }
+

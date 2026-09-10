@@ -125,19 +125,39 @@ INSERT: any authenticated user, for themselves only. UPDATE (status/reviewed_by/
 |---|---|---|
 | `id` | uuid | PK |
 | `user_id` | uuid | FK → `profiles.id`, recipient |
-| `type` | text | `'task_assigned'` \| `'izin_approved'` \| `'izin_rejected'` \| others as needed |
+| `category` | text | `'task'` \| `'izin'` — the broad event domain. Constrained via `CHECK`, extensible as new categories (e.g. future roles/domains) are added. |
+| `detail` | text | specific event within that category, e.g. `'assigned'`, `'approved'`, `'rejected'`. Constrained via `CHECK` per category. |
 | `reference_id` | uuid | id of the related task/izin row |
 | `message` | text | |
 | `is_read` | bool | default `false` |
 | `created_at` | timestamptz | default `now()` |
 
-INSERT: server-side/trigger-driven (on task assignment, on izin status change) rather than direct client insert. SELECT/UPDATE (mark read): only own rows (`user_id = auth.uid()`).
+Current canonical (`category`, `detail`) pairs:
+- `('task', 'assigned')` — a task was assigned to this user
+- `('izin', 'approved')` — this user's leave request was approved
+- `('izin', 'rejected')` — this user's leave request was rejected
+
+This replaces the earlier flat `type` string column. The two-column shape is deliberately more structured/extensible than a single growing enum, anticipating future role/domain expansion beyond the current Head/Member model. Enforce both columns with `CHECK` constraints listing the current canonical values, so a typo or unlisted combination fails loudly at insert time rather than silently creating an inconsistent row — any future addition of a new category or detail value must update the constraint at the same time.
+
+INSERT: server-side/trigger-driven only (on task assignment, on izin status change) — never a direct client insert from app code. See section 3 below for the trigger responsible for izin notifications. SELECT/UPDATE (mark read): only own rows (`user_id = auth.uid()`).
 
 Realtime enabled on this table so the client can subscribe and update the notification badge/feed live.
 
 ---
 
-## 3. Row Level Security (RLS) — summary
+## 3. Triggers
+
+- **`handle_new_user`** — on `auth.users` insert, creates the corresponding `profiles` row (already implemented).
+- **`handle_task_completion_status`** — on `task_completions` insert, flips the parent `tasks.status` to `'completed'` (already implemented).
+- **`handle_izin_status_notification`** (new) — on `pengajuan_izin` UPDATE where `status` changes from `'pending'` to `'approved'` or `'rejected'`, inserts a `notifications` row for `user_id = pengajuan_izin.user_id` with `category = 'izin'` and `detail = 'approved'`/`'rejected'` accordingly. Must be a database trigger, not an app-level insert — this guarantees the notification fires regardless of which code path changes the status (current UI, future admin tooling, direct SQL), matching the existing pattern used by `handle_task_completion_status`.
+
+## 4. Realtime publication
+
+Tables in `supabase_realtime`: `notifications`, `tasks`, `task_completions`, and **`pengajuan_izin`** (this last one was missing from the original migration — confirmed by QA pass — and must be added: `ALTER PUBLICATION supabase_realtime ADD TABLE public.pengajuan_izin;`).
+
+Both the requesting Member and any Head must receive live updates on `pengajuan_izin` — the Member sees their own request's status change live; a Head sees new pending requests and status changes across the board live (their RLS SELECT policy already permits seeing all rows, so their realtime subscription is unfiltered while a Member's is scoped to their own `user_id`).
+
+## 5. Row Level Security (RLS) — summary
 
 RLS must be **enabled on every table above**. General pattern:
 
@@ -155,7 +175,7 @@ This is the mechanism behind the "Tugas/Penugasan" and "Riwayat Anda/Riwayat Ang
 
 ---
 
-## 4. Storage
+## 6. Storage
 
 - Bucket: `completion-photos` — stores images referenced by `completion_photos.storage_path`.
 - Bucket: `avatars` — optional, for `profiles.avatar_url`.
@@ -163,14 +183,18 @@ This is the mechanism behind the "Tugas/Penugasan" and "Riwayat Anda/Riwayat Ang
 
 ---
 
-## 5. Resolved decisions (formerly open items)
+## 7. Resolved decisions (formerly open items)
 
 - Completions are final once submitted — no edit/resubmit, no UPDATE policy on `task_completions`.
 - Photo limit: 10MB per photo, 8 photos max per completion.
 - Task status is binary (`pending`/`completed`) — no `in_progress` state.
 - Heads can see tasks created by other Heads; creator attribution must always be visible in the UI (see `logic.md`).
+- `completion-photos` bucket confirmed private with signed/RLS-gated access (QA-verified).
+- Izin status-change notifications are DB-trigger-driven (`handle_izin_status_notification`), not app-level inserts — consistent with the completion-status trigger pattern.
+- `notifications` uses a `category`/`detail` two-column shape (Option B) instead of a flat `type` enum, chosen for extensibility ahead of anticipated future role/domain expansion beyond Head/Member.
+- Both Head and Member get live Realtime updates on `pengajuan_izin` — not just the requesting Member.
 
-## 6. Still open
+## 8. Still open
 
 - Whether `completion-photos` bucket should be public or private/signed-URL — recommended private, pending confirmation.
 - Full Riwayat Laporan hierarchy logic beyond basic own/all scoping — to be discussed in a follow-up session.

@@ -43,10 +43,29 @@ export default function NotifikasiPage() {
   }, [user, supabase]);
 
   useEffect(() => {
-    if (user) {
-      fetchNotifications();
-    }
-  }, [user, fetchNotifications]);
+    if (!user) return;
+    fetchNotifications();
+
+    const channel = supabase
+      .channel(`notifications_page_${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, fetchNotifications, supabase]);
 
   // Real database update per requirement:
   // UPDATE notifications SET is_read = true WHERE user_id = auth.uid()
@@ -115,7 +134,7 @@ export default function NotifikasiPage() {
               size="sm"
               onClick={markAllAsRead}
               isLoading={isMarking}
-              icon={<Check className="w-3.5 h-3.5" />}
+              icon={<Check className="w-4 h-4 text-[var(--accent-blue)]" />}
             >
               Tandai Semua Dibaca ({unreadCount})
             </Button>
@@ -124,18 +143,22 @@ export default function NotifikasiPage() {
 
         {isLoading ? (
           <div className="py-16 text-center text-xs text-[var(--text-secondary)]">
-            Memuat notifikasi dari database...
+            Memuat daftar notifikasi dari database...
           </div>
         ) : notifications.length === 0 ? (
-          <Card className="text-center py-16 text-[var(--text-secondary)]">
-            <Bell className="w-12 h-12 opacity-20 mx-auto mb-3" />
-            <p className="text-sm font-medium">Belum ada notifikasi</p>
-            <p className="text-xs mt-1">
-              Pemberitahuan penugasan baru atau persetujuan izin akan muncul di sini.
+          <Card className="text-center py-16">
+            <div className="w-12 h-12 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center mx-auto mb-3 text-[var(--text-secondary)]">
+              <Bell className="w-6 h-6" />
+            </div>
+            <h2 className="text-sm font-medium text-[var(--text-primary)]">
+              Belum Ada Notifikasi
+            </h2>
+            <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-sm mx-auto">
+              Anda akan menerima pemberitahuan ketika ditugaskan ke kegiatan baru atau ketika pengajuan izin Anda diproses.
             </p>
           </Card>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {notifications.map((n) => {
               const formattedTime = formatTimeAgo(new Date(n.created_at));
 
@@ -150,17 +173,23 @@ export default function NotifikasiPage() {
                   }`}
                 >
                   <div className="mt-0.5 w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
-                    {n.type === "task_assigned" ? (
+                    {n.category === "task" ? (
                       <CheckSquare className="w-4 h-4 text-[var(--accent-blue)]" />
+                    ) : n.detail === "approved" ? (
+                      <CalendarCheck className="w-4 h-4 text-[var(--status-success)]" />
                     ) : (
-                      <CalendarCheck className="w-4 h-4 text-[var(--accent-orange)]" />
+                      <CalendarCheck className="w-4 h-4 text-[var(--accent-red)]" />
                     )}
                   </div>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-xs font-semibold text-[var(--text-primary)]">
-                        {n.type === "task_assigned" ? "Penugasan Baru" : "Pemberitahuan"}
+                        {n.category === "task"
+                          ? "Penugasan Baru"
+                          : n.detail === "approved"
+                          ? "Izin Disetujui"
+                          : "Izin Ditolak"}
                       </h3>
                       <span className="text-[10px] text-[var(--text-secondary)] shrink-0 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
