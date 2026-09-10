@@ -1,26 +1,97 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Dark theme is default per design.md */
+  --bg: #0A0E14;
+  --surface: #12161F;
+  --surface-hover: #1A202C;
+  --border: #232936;
+  --text-primary: #F5F7FA;
+  --text-secondary: #8891A3;
+  --accent-blue: #3B82F6;
+  --accent-blue-strong: #0C447C;
+  --accent-blue-soft: #B5D4F4;
+  --accent-red: #EF4444;
+  --accent-orange: #F59E0B;
+  --status-success: #22C55E;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+[data-theme="light"], .light {
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --surface-hover: #EDF0F5;
+  --border: #E2E5EA;
+  --text-primary: #111827;
+  --text-secondary: #6B7280;
+  --accent-blue: #2563EB;
+  --accent-blue-strong: #1D4ED8;
+  --accent-blue-soft: #DBEAFE;
+  --accent-red: #DC2626;
+  --accent-orange: #D97706;
+  --status-success: #16A34A;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-border-main: var(--border);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-blue-strong: var(--accent-blue-strong);
+  --color-accent-blue-soft: var(--accent-blue-soft);
+  --color-accent-red: var(--accent-red);
+  --color-accent-orange: var(--accent-orange);
+  --color-status-success: var(--status-success);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-full: var(--radius-full);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbars matching design tokens */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-hover);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
+}
+
+/* Leaflet dark/light overrides */
+.leaflet-container {
+  font-family: inherit;
+  width: 100%;
+  height: 100%;
 }
