@@ -181,17 +181,23 @@ export default function CreateTaskPage() {
         return;
       }
 
-      // 3. Trigger notification for each assignee
+      // 3. Trigger notification for each assignee per Fix 3 (Indonesian minimal set: 'tugas'/'baru')
       const notifInserts = validAssignees.map((a) => ({
         user_id: a.id,
-        category: "task",
-        detail: "assigned",
+        category: "tugas",
+        detail: "baru",
         reference_id: createdTaskId,
         message: `Anda telah ditugaskan ke: ${title.trim()}`,
         is_read: false,
       }));
 
-      await supabase.from("notifications").insert(notifInserts);
+      const { error: notifError } = await supabase
+        .from("notifications")
+        .insert(notifInserts);
+
+      if (notifError) {
+        console.error("Failed to insert task notifications:", notifError);
+      }
 
       // Successfully saved! Redirect to Tugas list
       router.push("/tugas");

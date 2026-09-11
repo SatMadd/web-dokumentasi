@@ -57,8 +57,7 @@ export function LocationPicker({
   };
 
   // Search address using Nominatim
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runSearch = async () => {
     if (!searchQuery.trim()) return;
 
     setIsSearching(true);
@@ -77,6 +76,11 @@ export function LocationPicker({
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await runSearch();
   };
 
   const selectSearchResult = (item: { display_name: string; lat: string; lon: string }) => {
@@ -232,16 +236,29 @@ export function LocationPicker({
               <X className="w-5 h-5" />
             </button>
 
-            {/* Search Input */}
-            <form onSubmit={handleSearch} className="flex-1 max-w-md relative">
+            {/* Search Input (div instead of nested form to prevent outer form submission/reload) */}
+            <div className="flex-1 max-w-md relative">
               <input
                 type="text"
                 placeholder="Cari jalan, gedung, atau daerah..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    runSearch();
+                  }
+                }}
                 className="w-full bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] pl-9 pr-8 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-secondary)]/60 focus:outline-none focus:border-[var(--accent-blue)]"
               />
-              <Search className="w-4 h-4 text-[var(--text-secondary)] absolute left-3 top-3" />
+              <button
+                type="button"
+                onClick={runSearch}
+                aria-label="Cari alamat"
+                className="absolute left-3 top-3 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                <Search className="w-4 h-4" />
+              </button>
               {isSearching ? (
                 <Loader2 className="w-4 h-4 text-[var(--accent-blue)] absolute right-2.5 top-3 animate-spin" />
               ) : null}
@@ -260,7 +277,7 @@ export function LocationPicker({
                   ))}
                 </div>
               )}
-            </form>
+            </div>
 
             {/* Confirm selection button */}
             <Button

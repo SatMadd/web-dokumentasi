@@ -173,9 +173,9 @@ export default function NotifikasiPage() {
                   }`}
                 >
                   <div className="mt-0.5 w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
-                    {n.category === "task" ? (
+                    {n.category === "tugas" ? (
                       <CheckSquare className="w-4 h-4 text-[var(--accent-blue)]" />
-                    ) : n.detail === "approved" ? (
+                    ) : n.detail === "disetujui" ? (
                       <CalendarCheck className="w-4 h-4 text-[var(--status-success)]" />
                     ) : (
                       <CalendarCheck className="w-4 h-4 text-[var(--accent-red)]" />
@@ -185,9 +185,9 @@ export default function NotifikasiPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-xs font-semibold text-[var(--text-primary)]">
-                        {n.category === "task"
+                        {n.category === "tugas"
                           ? "Penugasan Baru"
-                          : n.detail === "approved"
+                          : n.detail === "disetujui"
                           ? "Izin Disetujui"
                           : "Izin Ditolak"}
                       </h3>

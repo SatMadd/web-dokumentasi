@@ -30,19 +30,23 @@ Permissions must be enforced both in the UI (hide controls a role shouldn't see)
 3. **Visibility** — the task appears in the Tugas list for every assignee, and for the creating Head (who can monitor it via the "Tugas/Penugasan" toggle — see section 5).
 4. **Opening a task** — tapping a task in the list shows a preview (title + time) first; tapping through opens full detail: full title, detailed date/time, planned location, and the Completion section.
 5. **Completion** — the assignee (Member or Head) fills out the Completion form: photo uploads (max 8), actual meeting start/end time, actual location (via map picker), and minutes/notulen text. See section 3.
-6. **Submission** — submitting creates a `task_completions` row (+ `completion_photos` rows). Task status updates accordingly. A success popup appears (blue check, white card, per `design.md`) and the user is auto-redirected to Riwayat Laporan after a short delay.
-7. **Status tracking** — task status is binary: `pending` → `completed`, flipping the moment a completion is submitted. There is no intermediate `in_progress` state.
+6. **Submission** — each assignee submits their own completion independently (`task_completions` row tied by `task_id` and `submitted_by`, plus `completion_photos` rows). Each assignee provides their own photos, minutes, actual time, and actual location. A success popup appears (blue check, white card, per `design.md`) and the user is auto-redirected to Riwayat Laporan after a short delay.
+7. **Status tracking** — task status is binary: `pending` → `completed`. The parent task status flips to `completed` if and only if **every assigned person has submitted their completion** (governed by the database trigger `handle_task_completion_status`). Until all assignees have submitted, the task remains `pending`, allowing remaining assignees to access and complete their form. Update: Riwayat Laporan surfaces a task as soon as any one assignee submits, showing a live per-assignee completion roster rather than waiting for full completion (see section 5).
 
 ---
 
 ## 3. Completion form rules
 
+- **Independent submissions**: in multi-assignee tasks, each assignee submits their own separate documentation tied by `(task_id, submitted_by)`. One assignee's submission does not mark the task complete for other assignees nor lock them out.
 - **Photos**: multiple allowed, capped at **8**, each file capped at **10MB**. Client-side validation should block adding a 9th photo, block any file over 10MB, and show the running count ("x of 8").
 - **Immutability**: once a completion is submitted, it **cannot be edited or resubmitted** by anyone, including the original submitter and Heads. The UI should not offer any edit affordance on a completed task's record — it becomes a permanent, read-only piece of the historical record (Riwayat Laporan).
 - **Actual vs. planned time/location**: the Completion form captures what *actually* happened (`meeting_start_time`, `meeting_end_time`, `actual_location_*`), which is intentionally separate from the Head's originally planned `scheduled_start/end` and `planned_location` on the task itself. Both are shown to the user so the distinction is visible, not hidden.
 - **Location input method**: manual — the user searches an address or taps a location on a map (not auto-GPS). Implemented via the shared map-thumbnail component: a small map preview with a pin sits above "Cari alamat atau pilih peta"; tapping it opens a fullscreen map picker with geocoding search (Nominatim) and an explicit X control to back out without applying changes. This same component is used both in task creation (Head sets planned location) and completion (assignee logs actual location).
 - **Minutes text**: free text field, no formatting requirements specified — plain text area.
 - **Submission**: one primary submit button. On success, show the success popup and redirect — no intermediate confirmation dialog needed (the popup itself is the confirmation).
+- **Multi-completion display**: in the task detail view, each submitted completion is displayed as an independent locked card (one per submitter). A task can show 0 to N locked cards depending on how many assignees have submitted so far. RLS determines which cards are visible: Heads see all submitters' cards; Members see only their own card.
+- **Form gate — per-user, not per-task**: the editable submission form is shown only when `completions.some(c => c.submitted_by === user.id) === false`. Task-level `status` is never used for this check — a task can still be `pending` overall while the current user has already submitted their own part.
+- **Simultaneous locked + form state**: for a partially-submitted multi-assignee task, a user who has not yet submitted will see any already-locked cards (from other submitters that RLS permits them to see) above their own editable form. Both sections coexist on the same page.
 
 ---
 
@@ -73,6 +77,15 @@ For **Tugas** and **Riwayat Laporan**, Heads see a switch/toggle not shown to Me
 
 This toggle changes which query is made (own-scoped vs. all-scoped), enforced by RLS as described in `schema.md` — the toggle is a UX convenience, not the actual security boundary.
 
+Update:
+Riwayat Laporan is no longer restricted to fully completed tasks only. For tasks with multiple assignees, the entry appears in Riwayat Laporan as soon as at least one assignee has submitted a completion — not only once all assignees have submitted. Each entry shows a per-assignee roster at the bottom: every assignee's name with their individual status, e.g. "Ahmad Fauzi — ✓ Selesai" / "Budi S. — Menunggu Dokumentasi." This lets a viewer (Member or Head, subject to existing RLS scoping) see who has and hasn't submitted their part of a shared task, without needing to separately check the Tugas list.
+
+A single-assignee task behaves as before: it appears once that one person submits, and the roster shows just that one name as complete.
+
+The task-level completed status (all assignees submitted) still governs whether the task is "locked" for editing purposes and whether it shows the "Selesai" badge elsewhere (Dashboard, Tugas list) — this Riwayat Laporan roster is a visibility/tracking change only, it does not affect when tasks.status itself flips to completed (that logic is unchanged from the earlier per-assignee completion trigger fix).
+
+RLS scoping is unchanged: a Member only sees rosters for tasks they're personally assigned to or created; a Head sees all, per the existing "Riwayat Anda / Riwayat Anggota" toggle.
+
 ### Creator attribution (cross-Head visibility)
 
 Heads can see **every task**, including ones created by other Heads — not just tasks they personally issued. To avoid ambiguity about whose task is whose, **every task must visibly display who created it** wherever a Head views tasks outside their own "Penugasan" tab — e.g. a line like "Dibuat oleh Suprapto" on the task card/detail. This applies to task list views, task detail, and anywhere else a Head might browse tasks created by peers. Members don't need this treatment as prominently since they only ever see tasks assigned to them (creator can still be shown, but there's no cross-Head ambiguity to resolve for a Member's own view).
@@ -95,8 +108,8 @@ Heads can see **every task**, including ones created by other Heads — not just
 ## 7. Notifications
 
 - Delivered via Supabase Realtime — live updates, not polling.
-- Structured as `category` (`'task'` | `'izin'`, extensible to future domains) + `detail` (specific event within that category, e.g. `'assigned'`, `'approved'`, `'rejected'`) rather than a single flat type string — chosen deliberately for extensibility ahead of anticipated future role/domain expansion beyond the current Head/Member model. See `schema.md` section 2 for the canonical (category, detail) pairs and their `CHECK` constraints.
-- Task-assignment notifications are inserted at the application level (alongside the `tasks`/`task_assignees` insert). Izin status-change notifications are inserted by a **database trigger** on `pengajuan_izin` (see `schema.md` section 3), not app code — this ensures the notification fires no matter what changes the status.
+- Structured as `category` (`'tugas'` | `'izin'`) + `detail` (`'baru'` for tugas, `'disetujui'` | `'ditolak'` for izin) rather than a single flat type string. Standardized on Indonesian minimal canonical pairs matching actual features: `('tugas', 'baru')`, `('izin', 'disetujui')`, `('izin', 'ditolak')`. See `schema.md` section 2 for the canonical pairs and their `CHECK` constraints.
+- Task-assignment notifications (`tugas`/`baru`) are inserted at the application level on task creation with explicit error checking. Izin status-change notifications (`izin`/`disetujui`, `izin`/`ditolak`) are inserted by a **database trigger** on `pengajuan_izin` (`handle_izin_status_notification`, see `schema.md` section 3), not app code — this ensures the notification fires no matter what changes the status.
 - Each notification belongs to exactly one recipient (`user_id`) and links back to the relevant task or leave request via `reference_id`.
 - Users can only see/mark-read their own notifications.
 

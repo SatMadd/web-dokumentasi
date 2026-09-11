@@ -101,16 +101,16 @@ export default function DashboardPage() {
             id: n.id,
             title: n.message,
             description:
-              n.category === "task"
+              n.category === "tugas"
                 ? "Penugasan baru"
-                : n.detail === "approved"
+                : n.detail === "disetujui"
                 ? "Permohonan izin disetujui"
                 : "Permohonan izin ditolak",
             time: timeAgo,
             type:
-              n.category === "task"
+              n.category === "tugas"
                 ? "assigned"
-                : n.detail === "approved"
+                : n.detail === "disetujui"
                 ? "completed"
                 : "izin",
           };

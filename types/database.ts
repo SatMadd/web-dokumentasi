@@ -78,8 +78,8 @@ export interface PengajuanIzin {
   reviewer?: Profile | null;
 }
 
-export type NotificationCategory = "task" | "izin";
-export type NotificationDetail = "assigned" | "approved" | "rejected";
+export type NotificationCategory = "tugas" | "izin";
+export type NotificationDetail = "baru" | "disetujui" | "ditolak";
 
 export interface Notification {
   id: string;

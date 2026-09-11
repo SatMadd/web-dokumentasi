@@ -13,6 +13,7 @@ import {
   User,
   FileCheck,
   AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, Input, Textarea } from "@/components/ui/Card";
@@ -22,7 +23,11 @@ import { LocationPicker } from "@/components/map/LocationPicker";
 import { SuccessPopup } from "@/components/ui/SuccessPopup";
 import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
-import { Task, TaskCompletion, CompletionPhoto } from "@/types/database";
+import { Task } from "@/types/database";
+
+// -----------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------
 
 interface UploadedPhoto {
   id: string;
@@ -32,6 +37,26 @@ interface UploadedPhoto {
   size: number;
 }
 
+/** One task_completions row, joined with submitter profile and photos. */
+interface CompletionWithDetails {
+  id: string;
+  task_id: string;
+  submitted_by: string;
+  minutes_text: string | null;
+  meeting_start_time: string | null;
+  meeting_end_time: string | null;
+  actual_location_address: string | null;
+  actual_location_lat: number | null;
+  actual_location_lng: number | null;
+  created_at: string;
+  submitter: { id: string; full_name: string; role: string } | null;
+  photos: { id: string; storage_path: string }[];
+}
+
+// -----------------------------------------------------------------------
+// Component
+// -----------------------------------------------------------------------
+
 export default function TaskDetailPage() {
   const params = useParams();
   const taskId = params?.id as string;
@@ -40,9 +65,12 @@ export default function TaskDetailPage() {
   const supabase = createClient();
 
   const [task, setTask] = useState<Task | null>(null);
-  const [existingCompletion, setExistingCompletion] = useState<TaskCompletion | null>(null);
-  const [completionPhotos, setCompletionPhotos] = useState<CompletionPhoto[]>([]);
+  /** All completions for this task — one per submitter */
+  const [completions, setCompletions] = useState<CompletionWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Signed URLs keyed by photo.id — populated asynchronously for ALL completions
+  const [signedPhotoUrls, setSignedPhotoUrls] = useState<Record<string, string>>({});
 
   // Completion form state
   const [actualStartTime, setActualStartTime] = useState("");
@@ -65,12 +93,16 @@ export default function TaskDetailPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
 
+  // -----------------------------------------------------------------------
+  // Data loading
+  // -----------------------------------------------------------------------
+
   const loadTaskData = useCallback(async () => {
     if (!taskId) return;
     setIsLoading(true);
 
     try {
-      // 1. Fetch real task from Supabase
+      // 1. Fetch task with creator + assignees
       const { data: taskData, error: taskError } = await supabase
         .from("tasks")
         .select(`
@@ -90,7 +122,7 @@ export default function TaskDetailPage() {
       } else if (taskData) {
         setTask(taskData as any);
 
-        // Pre-fill actual location default with planned location
+        // Pre-fill actual location with planned location as default
         if (taskData.planned_location) {
           setActualLocation({
             address: taskData.planned_location,
@@ -100,36 +132,84 @@ export default function TaskDetailPage() {
         }
       }
 
-      // 2. Fetch existing completion if any
-      const { data: compData } = await supabase
+      // 2. Fetch ALL completions for this task — one per assignee who has submitted.
+      //    Includes submitter profile and their photos.
+      //    RLS enforces: Heads see all rows; Members see only their own.
+      const { data: completionsData, error: completionsError } = await supabase
         .from("task_completions")
-        .select("*")
+        .select(`
+          *,
+          submitter:profiles!task_completions_submitted_by_fkey(id, full_name, role),
+          photos:completion_photos(id, storage_path)
+        `)
         .eq("task_id", taskId)
-        .maybeSingle();
+        .order("created_at", { ascending: true });
 
-      if (compData) {
-        setExistingCompletion(compData as any);
-        const { data: photoData } = await supabase
-          .from("completion_photos")
-          .select("*")
-          .eq("completion_id", compData.id);
-        if (photoData) {
-          setCompletionPhotos(photoData as CompletionPhoto[]);
-        }
+      if (completionsError) {
+        console.warn("Completions fetch error:", completionsError.message);
+        setCompletions([]);
+      } else {
+        setCompletions((completionsData ?? []) as CompletionWithDetails[]);
       }
     } catch (err) {
       console.warn("Error loading task detail:", err);
     } finally {
       setIsLoading(false);
     }
-  }, [taskId, supabase]);
+  }, [taskId, supabase, user, profile]);
 
   useEffect(() => {
     loadTaskData();
   }, [loadTaskData]);
 
-  // Client-side photo upload validation per logic.md section 3:
-  // "Capped at 8, each file capped at 10MB. Client-side validation blocks 9th photo and files >10MB"
+  // -----------------------------------------------------------------------
+  // Signed URLs — resolved for ALL photos across ALL completions
+  // (Fix 1: private bucket requires createSignedUrl, not getPublicUrl)
+  // -----------------------------------------------------------------------
+
+  useEffect(() => {
+    const allPhotos = completions.flatMap((c) => c.photos ?? []);
+    if (allPhotos.length === 0) {
+      setSignedPhotoUrls({});
+      return;
+    }
+
+    let isMounted = true;
+
+    async function resolveSignedUrls() {
+      const urlMap: Record<string, string> = {};
+      await Promise.all(
+        allPhotos.map(async (photo) => {
+          try {
+            const { data, error } = await supabase.storage
+              .from("completion-photos")
+              .createSignedUrl(photo.storage_path, 3600);
+            if (!error && data?.signedUrl) {
+              urlMap[photo.id] = data.signedUrl;
+            } else if (error) {
+              console.warn(`Signed URL failed for photo ${photo.id}:`, error.message);
+            }
+          } catch (err) {
+            console.warn(`Exception creating signed URL for photo ${photo.id}:`, err);
+          }
+        })
+      );
+
+      if (isMounted) {
+        setSignedPhotoUrls(urlMap);
+      }
+    }
+
+    resolveSignedUrls();
+    return () => {
+      isMounted = false;
+    };
+  }, [completions, supabase]);
+
+  // -----------------------------------------------------------------------
+  // Photo upload validation per logic.md section 3
+  // -----------------------------------------------------------------------
+
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setPhotoError(null);
     const files = e.target.files;
@@ -174,6 +254,10 @@ export default function TaskDetailPage() {
     setPhotos((prev) => prev.filter((p) => p.id !== photoId));
     setPhotoError(null);
   };
+
+  // -----------------------------------------------------------------------
+  // Completion form submission
+  // -----------------------------------------------------------------------
 
   const handleCompletionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -237,7 +321,6 @@ export default function TaskDetailPage() {
           const cleanName = p.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `${completionId}/${Date.now()}-${cleanName}`;
 
-          // Upload to Supabase Storage
           const { error: uploadError } = await supabase.storage
             .from("completion-photos")
             .upload(storagePath, p.file);
@@ -257,11 +340,10 @@ export default function TaskDetailPage() {
         }
       }
 
-      // 3. Status update is handled automatically by the DB trigger on_task_completion_inserted
-      // We also verify tasks status update
-      await supabase.from("tasks").update({ status: "completed" }).eq("id", taskId);
+      // 3. Status update is handled automatically by DB trigger handle_task_completion_status
+      //    which flips tasks.status to 'completed' only when all assignees have submitted.
 
-      // 4. Show success popup card only on confirmed successful write per logic.md section 3
+      // 4. Show success popup per logic.md section 3
       setShowSuccessPopup(true);
     } catch (err: any) {
       console.error("Completion submit exception:", err);
@@ -270,6 +352,20 @@ export default function TaskDetailPage() {
       setIsSubmitting(false);
     }
   };
+
+  // -----------------------------------------------------------------------
+  // Derived state
+  // -----------------------------------------------------------------------
+
+  /** True if the current user already has their own completion row for this task */
+  const hasSubmitted = completions.some((c) => c.submitted_by === user?.id);
+
+  /** Task-level status badge — still derived from tasks.status (trigger-controlled) */
+  const isTaskCompleted = task?.status === "completed";
+
+  // -----------------------------------------------------------------------
+  // Loading / not-found states
+  // -----------------------------------------------------------------------
 
   if (isLoading) {
     return (
@@ -306,12 +402,16 @@ export default function TaskDetailPage() {
     minute: "2-digit",
   });
 
-  const isCompleted = task.status === "completed" || existingCompletion !== null;
-  const isCreatedByOther = isHead && task.created_by !== user?.id && task.creator?.full_name;
+  const isCreatedByOther = isHead && task.created_by !== user?.id && (task as any).creator?.full_name;
+
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
 
   return (
     <AppShell>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+
         {/* Back Link */}
         <div>
           <Link
@@ -336,18 +436,18 @@ export default function TaskDetailPage() {
           </div>
         )}
 
-        {/* 1. Task Info Card */}
+        {/* ── 1. Task Info Card ── */}
         <Card className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[var(--border)]">
             <div className="flex items-center gap-2">
-              <Badge variant={isCompleted ? "green" : "blue"} size="md">
-                {isCompleted ? "Selesai" : "Menunggu Dokumentasi"}
+              <Badge variant={isTaskCompleted ? "green" : "blue"} size="md">
+                {isTaskCompleted ? "Selesai" : "Menunggu Dokumentasi"}
               </Badge>
 
               {/* Creator Attribution per logic.md section 5 */}
               {isCreatedByOther && (
                 <span className="text-xs text-[var(--text-secondary)]">
-                  Dibuat oleh <strong className="text-[var(--text-primary)] font-medium">{task.creator?.full_name}</strong>
+                  Dibuat oleh <strong className="text-[var(--text-primary)] font-medium">{(task as any).creator?.full_name}</strong>
                 </span>
               )}
             </div>
@@ -372,7 +472,7 @@ export default function TaskDetailPage() {
             </div>
           </div>
 
-          {/* Planned Location with Shared Map Thumbnail Component */}
+          {/* Planned Location */}
           <div className="pt-2">
             <LocationPicker
               label="Rencana Lokasi Kegiatan (Oleh Pembuat Tugas)"
@@ -391,8 +491,8 @@ export default function TaskDetailPage() {
               Petugas Pelaksana:
             </span>
             <div className="flex flex-wrap gap-2">
-              {task.assignees && task.assignees.length > 0 ? (
-                task.assignees.map((a, i) => (
+              {(task as any).assignees && (task as any).assignees.length > 0 ? (
+                (task as any).assignees.map((a: any, i: number) => (
                   <div
                     key={i}
                     className="inline-flex items-center gap-1.5 px-3 py-1 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-full)] text-xs text-[var(--text-primary)]"
@@ -408,102 +508,141 @@ export default function TaskDetailPage() {
           </div>
         </Card>
 
-        {/* 2. Completion Section */}
-        {isCompleted ? (
-          /* READ-ONLY IMMUTABLE COMPLETION RECORD per agents.md Rule 3 & logic.md section 3 */
-          <Card className="border-t-4 border-t-[var(--status-success)] space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[var(--border)]">
-              <div className="flex items-center gap-2">
-                <FileCheck className="w-5 h-5 text-[var(--status-success)]" />
-                <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-                  Dokumentasi Pelaksanaan (Laporan Terkunci)
-                </h2>
-              </div>
-              <Badge variant="green" size="sm">Terkunci & Sah</Badge>
+        {/* ── 2. Completion Section ── */}
+
+        {/* READ-ONLY LOCKED CARDS — one per assignee who has submitted
+            Per logic.md section 3: each card is independently immutable once submitted.
+            RLS: Heads see all; Members see only their own row. */}
+        {completions.length > 0 && (
+          <div className="space-y-4">
+            {/* Section header */}
+            <div className="flex items-center gap-2">
+              <FileCheck className="w-4 h-4 text-[var(--status-success)]" />
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+                Dokumentasi Pelaksanaan
+                {completions.length > 1 && (
+                  <span className="ml-1.5 text-xs font-normal text-[var(--text-secondary)]">
+                    ({completions.length} laporan)
+                  </span>
+                )}
+              </h2>
+              <Badge variant="green" size="sm" className="ml-auto">Terkunci &amp; Sah</Badge>
             </div>
 
-            <p className="text-xs text-[var(--text-secondary)] italic">
-              Dokumentasi ini telah tersimpan di database dan bersifat permanen/tidak dapat disunting kembali sesuai ketentuan integritas arsip DOOR.
-            </p>
+            {completions.map((comp) => {
+              const compPhotos = comp.photos ?? [];
+              const submitterLabel = comp.submitter?.role === "head" ? "Kepala" : "Anggota";
+              const submittedAt = new Date(comp.created_at).toLocaleDateString("id-ID", {
+                day: "numeric", month: "short", year: "numeric",
+              });
+              const actualStart = comp.meeting_start_time
+                ? new Date(comp.meeting_start_time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB"
+                : "-";
+              const actualEnd = comp.meeting_end_time
+                ? new Date(comp.meeting_end_time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB"
+                : null;
 
-            {/* Actual time & location */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
-              <div>
-                <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1">
-                  Waktu Aktual:
-                </span>
-                <p className="text-sm text-[var(--text-primary)]">
-                  {existingCompletion?.meeting_start_time
-                    ? new Date(existingCompletion.meeting_start_time).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })
-                    : formattedStartTime} WIB
-                </p>
-              </div>
+              return (
+                <Card
+                  key={comp.id}
+                  className="border-l-4 border-l-[var(--status-success)] space-y-4"
+                >
+                  {/* Submitter byline */}
+                  <div className="flex items-center justify-between pb-3 border-b border-[var(--border)]">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-[var(--status-success)]" />
+                      <span className="text-sm font-medium text-[var(--text-primary)]">
+                        {comp.submitter?.full_name ?? "Petugas"}
+                      </span>
+                      <span className="text-xs text-[var(--text-secondary)]">— {submitterLabel}</span>
+                    </div>
+                    <span className="text-[11px] text-[var(--text-secondary)]">{submittedAt}</span>
+                  </div>
 
-              <div>
-                <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1">
-                  Lokasi Aktual:
-                </span>
-                <p className="text-sm text-[var(--text-primary)]">
-                  {existingCompletion?.actual_location_address || task.planned_location || "Sesuai lokasi rencana"}
-                </p>
-              </div>
-            </div>
+                  <p className="text-xs text-[var(--text-secondary)] italic">
+                    Laporan ini telah tersimpan dan bersifat permanen — tidak dapat disunting kembali sesuai ketentuan integritas arsip DOOR.
+                  </p>
 
-            {/* Minutes / Notulen text */}
-            <div className="pt-2 border-t border-[var(--border)]">
-              <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
-                Ringkasan Notulen / Risalah Rapat:
-              </span>
-              <div className="p-3.5 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
-                {existingCompletion?.minutes_text || "Notulen rapat tercatat lengkap."}
-              </div>
-            </div>
+                  {/* Actual time & location */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
+                    <div>
+                      <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1">
+                        Waktu Aktual:
+                      </span>
+                      <p className="text-sm text-[var(--text-primary)]">
+                        {actualStart}{actualEnd ? ` – ${actualEnd}` : ""}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1">
+                        Lokasi Aktual:
+                      </span>
+                      <p className="text-sm text-[var(--text-primary)]">
+                        {comp.actual_location_address || task.planned_location || "Sesuai lokasi rencana"}
+                      </p>
+                    </div>
+                  </div>
 
-            {/* Photos Display */}
-            {completionPhotos.length > 0 && (
-              <div className="pt-2 border-t border-[var(--border)]">
-                <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
-                  Foto Bukti Dokumentasi ({completionPhotos.length} foto):
-                </span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {completionPhotos.map((photo) => {
-                    const publicUrl = supabase.storage
-                      .from("completion-photos")
-                      .getPublicUrl(photo.storage_path).data.publicUrl;
+                  {/* Minutes / Notulen */}
+                  <div className="pt-2 border-t border-[var(--border)]">
+                    <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
+                      Ringkasan Notulen / Risalah Rapat:
+                    </span>
+                    <div className="p-3.5 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
+                      {comp.minutes_text || "Notulen rapat tercatat lengkap."}
+                    </div>
+                  </div>
 
-                    return (
-                      <div
-                        key={photo.id}
-                        className="aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] overflow-hidden relative group"
-                      >
-                        <img
-                          src={publicUrl}
-                          alt="Dokumentasi Rapat"
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            // Fallback thumbnail view
-                            (e.target as HTMLElement).style.display = "none";
-                          }}
-                        />
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center pointer-events-none">
-                          <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
-                          <span className="text-[10px] truncate max-w-full px-1">
-                            {photo.storage_path.split("/").pop()}
-                          </span>
-                        </div>
+                  {/* Photos — signed URLs from the shared map */}
+                  {compPhotos.length > 0 && (
+                    <div className="pt-2 border-t border-[var(--border)]">
+                      <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
+                        Foto Bukti Dokumentasi ({compPhotos.length} foto):
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        {compPhotos.map((photo) => {
+                          const signedUrl = signedPhotoUrls[photo.id];
+                          return (
+                            <div
+                              key={photo.id}
+                              className="aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] overflow-hidden relative group"
+                            >
+                              {signedUrl ? (
+                                <img
+                                  src={signedUrl}
+                                  alt="Dokumentasi Rapat"
+                                  className="w-full h-full object-cover relative z-10"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = "none";
+                                  }}
+                                />
+                              ) : null}
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center pointer-events-none z-0">
+                                <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
+                                <span className="text-[10px] truncate max-w-full px-1">
+                                  {photo.storage_path.split("/").pop()}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </Card>
-        ) : (
-          /* COMPLETION FORM per logic.md section 3 */
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── COMPLETION FORM — only shown when the current user has NOT yet submitted ──
+            Per logic.md section 3: check is per-user (hasSubmitted), not per task.status.
+            A task can simultaneously show locked cards for other submitters + this form. */}
+        {!hasSubmitted && (
           <Card className="space-y-6">
             <div className="pb-3 border-b border-[var(--border)]">
               <h2 className="text-base font-semibold text-[var(--text-primary)]">
-                Formulir Penyelesaian & Dokumentasi Tugas
+                Formulir Penyelesaian &amp; Dokumentasi Tugas
               </h2>
               <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                 Unggah bukti foto, catat waktu aktual, dan lampirkan notulen rapat ke database.
@@ -511,7 +650,7 @@ export default function TaskDetailPage() {
             </div>
 
             <form onSubmit={handleCompletionSubmit} className="space-y-6">
-              {/* Photo Upload Grid: 4-col 1:1 square tiles on mobile, max 8, 10MB per file per logic.md */}
+              {/* Photo Upload Grid */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-medium text-[var(--text-secondary)]">
@@ -529,7 +668,6 @@ export default function TaskDetailPage() {
                   </div>
                 )}
 
-                {/* 4-column grid of square (1:1) tiles per design.md section 5 */}
                 <div className="grid grid-cols-4 gap-2 sm:gap-3">
                   {photos.map((photo) => (
                     <div
@@ -552,7 +690,6 @@ export default function TaskDetailPage() {
                     </div>
                   ))}
 
-                  {/* Explicit Add Tile with dashed blue border and plus icon if < 8 photos */}
                   {photos.length < 8 && (
                     <label className="aspect-square rounded-[var(--radius-sm)] border-2 border-dashed border-[var(--accent-blue)]/50 hover:border-[var(--accent-blue)] bg-[var(--surface-hover)]/40 hover:bg-[var(--surface-hover)] flex flex-col items-center justify-center cursor-pointer transition-colors text-center p-2 group">
                       <Camera className="w-5 h-5 text-[var(--accent-blue)] group-hover:scale-110 transition-transform mb-1" />
@@ -575,7 +712,7 @@ export default function TaskDetailPage() {
                 </p>
               </div>
 
-              {/* Actual Start & End Time per logic.md section 3 */}
+              {/* Actual Time */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   label="Waktu Mulai Aktual Kegiatan *"
@@ -584,7 +721,6 @@ export default function TaskDetailPage() {
                   onChange={(e) => setActualStartTime(e.target.value)}
                   required
                 />
-
                 <Input
                   label="Waktu Selesai Aktual Kegiatan (Opsional)"
                   type="time"
@@ -593,7 +729,7 @@ export default function TaskDetailPage() {
                 />
               </div>
 
-              {/* Actual Location Picker (Shared Map-Thumbnail Component) */}
+              {/* Actual Location Picker */}
               <div>
                 <LocationPicker
                   label="Lokasi Aktual Kegiatan (Verifikasi Titik Koordinat)"
@@ -602,7 +738,7 @@ export default function TaskDetailPage() {
                 />
               </div>
 
-              {/* Minutes / Notulen Textarea */}
+              {/* Minutes / Notulen */}
               <div>
                 <Textarea
                   label="Notulen / Risalah Rapat & Catatan Dokumentasi *"
@@ -614,17 +750,12 @@ export default function TaskDetailPage() {
                 />
               </div>
 
-              {/* Single primary submit button per design.md section 5 */}
+              {/* Submit */}
               <div className="pt-4 border-t border-[var(--border)] flex items-center justify-between">
                 <span className="text-xs text-[var(--text-secondary)]">
                   Laporan akan tersimpan dan terkunci secara permanen.
                 </span>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isLoading={isSubmitting}
-                >
+                <Button type="submit" variant="primary" isLoading={isSubmitting}>
                   Kirim Dokumentasi
                 </Button>
               </div>
@@ -633,7 +764,7 @@ export default function TaskDetailPage() {
         )}
       </div>
 
-      {/* Success Popup Modal: only shown after confirmed successful database insert */}
+      {/* Success Popup — shown only after confirmed successful database insert */}
       <SuccessPopup
         isOpen={showSuccessPopup}
         title="Laporan terkirim"
