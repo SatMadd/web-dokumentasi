@@ -1,39 +1,30 @@
 -- ==============================================================================
--- DOOR (preserveD dOcumentatiOn progRam)
--- Database Setup & Storage Configuration Script
--- Run this script in the Supabase SQL Editor (Dashboard -> SQL Editor -> New Query)
+-- Migration: Storage RLS Fix & Task Assignees Co-Visibility Fix
+-- 
+-- 1. Storage RLS on completion-photos:
+--    - Enforce private bucket (public = false)
+--    - SELECT (read): Heads see all; Members see own completion photos only
+--    - INSERT (upload): Only the actual submitter (submitted_by = auth.uid())
+--      can upload to completion-photos/{completion_id}/...
+--    - Co-assignees cannot read or upload each other's photos.
+--
+-- 2. Task Assignees SELECT RLS:
+--    - Heads see all assignees on all tasks.
+--    - Assigned users (and creators) see all assignees for their assigned tasks.
+--    - Resolves Bug 2 where multi-assignee tasks displayed only 1 assignee
+--      to assigned Members.
 -- ==============================================================================
 
--- 1. Enable pgcrypto extension for password hashing
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- ------------------------------------------------------------------------------
+-- 1. Storage Bucket Configuration & RLS Policies
+-- ------------------------------------------------------------------------------
 
--- 2. Create the check_user_exists RPC function for the Login page
-CREATE OR REPLACE FUNCTION public.check_user_exists(p_email text)
-RETURNS boolean
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = public, auth
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users WHERE lower(email) = lower(p_email)
-  );
-$$;
+-- Ensure bucket is private
+UPDATE storage.buckets
+SET public = false
+WHERE id = 'completion-photos';
 
-GRANT EXECUTE ON FUNCTION public.check_user_exists(text) TO anon, authenticated;
-
--- 3. Ensure the completion-photos storage bucket exists (private bucket per schema.md section 6)
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-  'completion-photos',
-  'completion-photos',
-  false, -- Private bucket: signed URLs generated per-request
-  10485760, -- 10MB limit per file per logic.md section 3
-  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/jpg']
-)
-ON CONFLICT (id) DO UPDATE
-SET public = false, file_size_limit = 10485760;
-
--- Storage policies
+-- Drop old storage policies
 DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
 DROP POLICY IF EXISTS "Allow public read" ON storage.objects;
 DROP POLICY IF EXISTS "completion_photos_upload" ON storage.objects;
@@ -55,7 +46,7 @@ USING (
   )
 );
 
--- Upload policy: Only the actual submitter can upload to their completion folder
+-- Upload (INSERT) policy: Only the actual submitter can upload to their completion folder
 CREATE POLICY "completion_photos_upload"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -68,7 +59,11 @@ WITH CHECK (
   )
 );
 
--- 4. Helper function and policy for task_assignees co-visibility
+-- ------------------------------------------------------------------------------
+-- 2. Task Assignees Co-Visibility (Bug 2 Fix)
+-- ------------------------------------------------------------------------------
+
+-- Helper function to safely check task membership without RLS recursion
 CREATE OR REPLACE FUNCTION public.is_task_assignee_or_creator(p_task_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -87,6 +82,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.is_task_assignee_or_creator(uuid) TO authenticated;
 
+-- Update task_assignees_select policy
 DROP POLICY IF EXISTS "task_assignees_select" ON public.task_assignees;
 
 CREATE POLICY "task_assignees_select"
@@ -97,7 +93,3 @@ USING (
   OR user_id = auth.uid()
   OR public.is_task_assignee_or_creator(task_id)
 );
-
--- 5. NOTE ON AUTH USER CREATION:
--- All user accounts must be created using the Supabase Admin API:
---   Run: npm run seed

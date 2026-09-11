@@ -193,6 +193,12 @@ The `completion_photos_read` Storage policy grants access as follows:
 
 **Co-assignee restriction**: a Member cannot read another assignee's completion photos, even on the same shared task. This matches the table-level `completion_photos_select` RLS policy intent (`schema.md` section 5: "Members: SELECT own only via completion join"). Broadening this to allow co-assignee cross-access would require an explicit policy decision and updates to both the `completion_photos_select` RLS and this Storage policy.
 
+### Storage upload (INSERT) policy
+
+Not previously documented in detail — closing this gap now, since it's the same class of issue as the read policy above and should not be left unspecified. Order of operations: the `task_completions` row is inserted first (so it has an `id`), then photo files are uploaded to `completion-photos/{completion_id}/...` referencing that id, then `completion_photos` rows are inserted.
+
+The upload `WITH CHECK` policy on `storage.objects` must verify: the `completion_id` (first path segment) resolves to a `task_completions` row where `submitted_by = auth.uid()`. Heads do not get a blanket upload allowance here — only the actual submitter uploads their own completion's photos; a Head never uploads on someone else's behalf per the existing flow. If this policy is missing or falls back to a permissive/any-authenticated-user check, it should be tightened to match this rule.
+
 
 
 ---
@@ -207,8 +213,9 @@ The `completion_photos_read` Storage policy grants access as follows:
 - Izin status-change notifications are DB-trigger-driven (`handle_izin_status_notification`), not app-level inserts — consistent with the completion-status trigger pattern.
 - `notifications` uses a `category`/`detail` two-column shape (Option B) instead of a flat `type` enum, chosen for extensibility ahead of anticipated future role/domain expansion beyond Head/Member.
 - Both Head and Member get live Realtime updates on `pengajuan_izin` — not just the requesting Member.
+- Storage path convention confirmed as `{completion_id}/{timestamp}-{filename}`; read/upload RLS must key off `completion_id`, not user id.
+- Co-assignees do not see each other's completion photos — own-only, Head sees all.
 
 ## 8. Still open
 
-- Whether `completion-photos` bucket should be public or private/signed-URL — recommended private, pending confirmation.
 - Full Riwayat Laporan hierarchy logic beyond basic own/all scoping — to be discussed in a follow-up session.

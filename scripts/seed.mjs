@@ -109,16 +109,20 @@ async function seed() {
     }
   }
 
-  // Ensure storage bucket exists
+  // Ensure storage bucket exists and is private per schema.md section 6
   console.log("\nVerifying 'completion-photos' storage bucket...");
   const { data: bData, error: bErr } = await supabaseAdmin.storage.createBucket("completion-photos", {
-    public: true,
+    public: false,
     fileSizeLimit: 10485760,
   });
   if (bErr) {
     console.log("Storage bucket notice:", bErr.message);
+    await supabaseAdmin.storage.updateBucket("completion-photos", {
+      public: false,
+      fileSizeLimit: 10485760,
+    });
   } else {
-    console.log("Storage bucket 'completion-photos' verified/created successfully.");
+    console.log("Storage bucket 'completion-photos' verified/created successfully as private.");
   }
 
   console.log("\n=== Seeding Summary ===");
