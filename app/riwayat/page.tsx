@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -61,15 +61,14 @@ interface RiwayatTask {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a per-assignee roster showing who has submitted and who hasn't.
- * Reconciles task_assignees (full list) against task_completions (submitted set).
+ * Fallback helper to reconcile assignees vs completions if RPC is pending.
  */
-function buildRoster(task: RiwayatTask): AssigneeRosterEntry[] {
-  return task.assignees.map((a) => ({
+function buildFallbackRoster(task: RiwayatTask): AssigneeRosterEntry[] {
+  return (task.assignees ?? []).map((a) => ({
     userId: a.user_id,
     fullName: a.profile?.full_name ?? "Petugas",
     role: a.profile?.role ?? "member",
-    hasSubmitted: task.completions.some((c) => c.submitted_by === a.user_id),
+    hasSubmitted: (task.completions ?? []).some((c) => c.submitted_by === a.user_id),
   }));
 }
 
@@ -97,24 +96,17 @@ function formatTime(iso: string | null) {
 
 export default function RiwayatPage() {
   const { user, profile, isHead } = useAuth();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Basic own-vs-all scoping per logic.md section 5
   const [headScopeTab, setHeadScopeTab] = useState<"own" | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [tasks, setTasks] = useState<RiwayatTask[]>([]);
+  const [taskRosters, setTaskRosters] = useState<Record<string, AssigneeRosterEntry[]>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   // ---------------------------------------------------------------------------
-  // Fetch — anchored on tasks, not on task_completions
-  //
-  // Per logic.md section 5 update: Riwayat Laporan surfaces a task as soon as
-  // at least one assignee has submitted. We fetch tasks + their completions +
-  // assignees in one query, then filter client-side for completions.length > 0.
-  //
-  // RLS still enforces the actual security boundary:
-  //   Heads see all task_completions rows;
-  //   Members see only rows where submitted_by = auth.uid().
+  // Fetch — anchored on tasks with RPC-backed status rosters
   // ---------------------------------------------------------------------------
 
   const fetchTasks = useCallback(async () => {
@@ -142,14 +134,43 @@ export default function RiwayatPage() {
         .order("scheduled_start", { ascending: false });
 
       if (!error && data) {
-        setTasks(data as any);
+        const fetchedTasks = data as any as RiwayatTask[];
+        setTasks(fetchedTasks);
+
+        // Fetch per-assignee completion statuses via get_task_completion_status RPC
+        const rosterMap: Record<string, AssigneeRosterEntry[]> = {};
+        await Promise.allSettled(
+          fetchedTasks.map(async (t) => {
+            try {
+              const { data: rpcData, error: rpcErr } = await supabase.rpc(
+                "get_task_completion_status",
+                { p_task_id: t.id }
+              );
+              if (!rpcErr && rpcData) {
+                rosterMap[t.id] = (rpcData as any[]).map((r) => ({
+                  userId: r.user_id,
+                  fullName: r.full_name,
+                  role: "member",
+                  hasSubmitted: !!r.has_submitted,
+                }));
+              } else {
+                rosterMap[t.id] = buildFallbackRoster(t);
+              }
+            } catch {
+              rosterMap[t.id] = buildFallbackRoster(t);
+            }
+          })
+        );
+        setTaskRosters(rosterMap);
       } else {
         if (error) console.warn("Fetch riwayat tasks error:", error.message);
         setTasks([]);
+        setTaskRosters({});
       }
     } catch (err) {
       console.warn("Exception fetching riwayat tasks:", err);
       setTasks([]);
+      setTaskRosters({});
     } finally {
       setIsLoading(false);
     }
@@ -163,35 +184,42 @@ export default function RiwayatPage() {
 
   // ---------------------------------------------------------------------------
   // Filter logic
-  //
-  // Step 1: Only tasks that have at least one completion (surfaces partial submissions).
-  // Step 2: Scope filter — "own" shows only tasks where I personally submitted;
-  //         "all" (Head only) shows every task with any completion.
-  // Step 3: Search filter across title, submitter names, location.
   // ---------------------------------------------------------------------------
 
   const filteredTasks = tasks
-    .filter((t) => t.completions.length > 0)
     .filter((t) => {
-      // Scope filter
+      const roster = taskRosters[t.id] || buildFallbackRoster(t);
+      const hasAnySubmission = roster.some((r) => r.hasSubmitted) || (t.completions?.length ?? 0) > 0;
+      return hasAnySubmission;
+    })
+    .filter((t) => {
+      const roster = taskRosters[t.id] || buildFallbackRoster(t);
+
+      // Scope filter:
       if (isHead && headScopeTab === "all") {
         return true;
       }
       // "own" tab (Head) or Member: only tasks where the current user has submitted
-      return t.completions.some((c) => c.submitted_by === user?.id);
+      const currentUserSubmitted =
+        roster.some((r) => r.userId === user?.id && r.hasSubmitted) ||
+        (t.completions ?? []).some((c) => c.submitted_by === user?.id);
+
+      return currentUserSubmitted;
     })
     .filter((t) => {
-      // Search filter — match title, any submitter name, or location from any completion
+      // Search filter
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       const titleMatch = t.title.toLowerCase().includes(q);
-      const submitterMatch = t.completions.some(
-        (c) => c.submitter?.full_name?.toLowerCase().includes(q)
+      const submitterMatch = (t.completions ?? []).some((c) =>
+        c.submitter?.full_name?.toLowerCase().includes(q)
       );
-      const locationMatch = t.completions.some(
-        (c) => c.actual_location_address?.toLowerCase().includes(q)
+      const roster = taskRosters[t.id] || buildFallbackRoster(t);
+      const rosterMatch = roster.some((r) => r.fullName.toLowerCase().includes(q));
+      const locationMatch = (t.completions ?? []).some((c) =>
+        c.actual_location_address?.toLowerCase().includes(q)
       );
-      return titleMatch || submitterMatch || locationMatch;
+      return titleMatch || submitterMatch || rosterMatch || locationMatch;
     });
 
   // ---------------------------------------------------------------------------
@@ -223,7 +251,7 @@ export default function RiwayatPage() {
           </div>
         </div>
 
-        {/* Head-Only Scope Switcher: "Riwayat Anda" vs "Riwayat Anggota" per logic.md section 5 */}
+        {/* Head-Only Scope Switcher: "Riwayat Anda" vs "Riwayat Anggota" */}
         {isHead && (
           <div className="inline-flex p-1 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)]">
             <button
@@ -281,15 +309,15 @@ export default function RiwayatPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredTasks.map((task) => {
-              const roster = buildRoster(task);
-              const allDone = roster.every((r) => r.hasSubmitted);
-              const totalPhotos = task.completions.reduce(
+              const roster = taskRosters[task.id] || buildFallbackRoster(task);
+              const allDone = roster.length > 0 && roster.every((r) => r.hasSubmitted);
+              const totalPhotos = (task.completions ?? []).reduce(
                 (sum, c) => sum + (c.photos?.length ?? 0),
                 0
               );
 
-              // Representative completion for summary content — earliest submitted
-              const repComp = task.completions[0];
+              // Representative completion for summary content (if visible under RLS)
+              const repComp = task.completions?.[0];
               const repSubmitter = repComp?.submitter?.full_name ?? "Petugas";
               const scheduledDate = formatDate(task.scheduled_start);
               const meetingTime = formatTime(repComp?.meeting_start_time ?? null);
@@ -315,32 +343,40 @@ export default function RiwayatPage() {
                       {task.title}
                     </h3>
 
-                    {/* Representative metadata */}
+                    {/* Representative metadata (shown when completions are available) */}
                     <div className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
-                      {/* Show submitter count if multi-completion */}
-                      <div className="flex items-center gap-2">
-                        <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                        <span className="truncate">
-                          {task.completions.length > 1
-                            ? `${task.completions.length} laporan diserahkan`
-                            : (
-                              <>
-                                Diserahkan oleh:{" "}
-                                <strong className="text-[var(--text-primary)] font-medium">
-                                  {repSubmitter}
-                                </strong>
-                              </>
-                            )}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                        <span>Pukul {meetingTime}</span>
-                      </div>
-                      {repComp?.actual_location_address && (
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
-                          <span className="truncate">{repComp.actual_location_address}</span>
+                      {task.completions && task.completions.length > 0 ? (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                            <span className="truncate">
+                              {task.completions.length > 1
+                                ? `${task.completions.length} laporan diserahkan`
+                                : (
+                                  <>
+                                    Diserahkan oleh:{" "}
+                                    <strong className="text-[var(--text-primary)] font-medium">
+                                      {repSubmitter}
+                                    </strong>
+                                  </>
+                                )}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                            <span>Pukul {meetingTime}</span>
+                          </div>
+                          {repComp?.actual_location_address && (
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
+                              <span className="truncate">{repComp.actual_location_address}</span>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-2 text-[var(--text-secondary)] italic">
+                          <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                          <span>Dokumentasi rekan terkunci hingga seluruh tugas selesai</span>
                         </div>
                       )}
                     </div>
@@ -352,9 +388,7 @@ export default function RiwayatPage() {
                       </p>
                     )}
 
-                    {/* ── Per-assignee roster ──
-                        Only shown for multi-assignee tasks OR always, to confirm status.
-                        Single-entry roster ("Ahmad Fauzi — Selesai") is natural and minimal. */}
+                    {/* ── Per-assignee roster (powered by get_task_completion_status RPC) ── */}
                     <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1.5">
                       <span className="text-[11px] font-medium text-[var(--text-secondary)] uppercase tracking-wide">
                         Status Dokumentasi Petugas

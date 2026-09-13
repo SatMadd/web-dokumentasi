@@ -33,11 +33,23 @@ export function LocationPicker({
   const mapInstanceRef = useRef<any>(null);
   const markerInstanceRef = useRef<any>(null);
 
+  // Sync state with incoming props
   useEffect(() => {
-    if (value.address) setAddress(value.address);
+    if (value.address !== undefined) setAddress(value.address);
     if (value.lat) setSelectedLat(value.lat);
     if (value.lng) setSelectedLng(value.lng);
-  }, [value]);
+  }, [value.address, value.lat, value.lng]);
+
+  // When opening modal, sync latest value
+  useEffect(() => {
+    if (isOpen) {
+      if (value.address !== undefined) setAddress(value.address);
+      if (value.lat) setSelectedLat(value.lat);
+      if (value.lng) setSelectedLng(value.lng);
+      setSearchQuery("");
+      setSearchResults([]);
+    }
+  }, [isOpen, value]);
 
   // Reverse geocode lat/lng using Nominatim
   const reverseGeocode = async (lat: number, lng: number) => {
@@ -221,11 +233,11 @@ export function LocationPicker({
         </div>
       </div>
 
-      {/* Fullscreen Map Modal Takeover */}
+      {/* Fullscreen Map Modal Takeover — high z-index (2000+) so it overlays all app layout and Leaflet controls */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[var(--bg)] animate-in fade-in duration-200">
-          {/* Header Bar */}
-          <div className="flex items-center justify-between p-3 sm:p-4 bg-[var(--surface)] border-b border-[var(--border)] shrink-0 gap-2">
+        <div className="fixed inset-0 z-[2000] flex flex-col bg-[var(--bg)] animate-in fade-in duration-200">
+          {/* Header Bar — elevated z-index (2010) above map container */}
+          <div className="relative z-[2010] flex items-center justify-between p-3 sm:p-4 bg-[var(--surface)] border-b border-[var(--border)] shrink-0 gap-2">
             {/* Top-left X close control */}
             <button
               type="button"
@@ -236,8 +248,8 @@ export function LocationPicker({
               <X className="w-5 h-5" />
             </button>
 
-            {/* Search Input (div instead of nested form to prevent outer form submission/reload) */}
-            <div className="flex-1 max-w-md relative">
+            {/* Search Input Container */}
+            <div className="flex-1 max-w-md relative z-[2020]">
               <input
                 type="text"
                 placeholder="Cari jalan, gedung, atau daerah..."
@@ -263,9 +275,9 @@ export function LocationPicker({
                 <Loader2 className="w-4 h-4 text-[var(--accent-blue)] absolute right-2.5 top-3 animate-spin" />
               ) : null}
 
-              {/* Search Suggestions Dropdown */}
+              {/* Search Suggestions Dropdown — z-[2030] comfortably above Leaflet controls & panes */}
               {searchResults.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-md)] shadow-xl z-50 max-h-60 overflow-y-auto">
+                <div className="absolute left-0 right-0 top-full mt-1 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-md)] shadow-2xl z-[2030] max-h-60 overflow-y-auto">
                   {searchResults.map((item, idx) => (
                     <div
                       key={idx}
@@ -291,11 +303,11 @@ export function LocationPicker({
           </div>
 
           {/* Map View */}
-          <div className="flex-1 relative w-full h-full bg-[var(--surface)]">
+          <div className="flex-1 relative w-full h-full bg-[var(--surface)] z-0">
             <div ref={mapContainerRef} className="w-full h-full" />
 
-            {/* Address Banner Bottom overlay */}
-            <div className="absolute bottom-4 left-4 right-4 z-10 bg-[var(--surface)]/95 backdrop-blur-xs border border-[var(--border)] p-3 rounded-[var(--radius-lg)] shadow-lg max-w-lg mx-auto flex items-center justify-between gap-3">
+            {/* Address Banner Bottom overlay — z-[1000] */}
+            <div className="absolute bottom-4 left-4 right-4 z-[1000] bg-[var(--surface)]/95 backdrop-blur-xs border border-[var(--border)] p-3 rounded-[var(--radius-lg)] shadow-lg max-w-lg mx-auto flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 overflow-hidden">
                 <MapPin className="w-4 h-4 text-[var(--accent-red)] shrink-0" />
                 <span className="text-xs text-[var(--text-primary)] truncate font-medium">

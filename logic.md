@@ -44,9 +44,9 @@ Permissions must be enforced both in the UI (hide controls a role shouldn't see)
 - **Location input method**: manual — the user searches an address or taps a location on a map (not auto-GPS). Implemented via the shared map-thumbnail component: a small map preview with a pin sits above "Cari alamat atau pilih peta"; tapping it opens a fullscreen map picker with geocoding search (Nominatim) and an explicit X control to back out without applying changes. This same component is used both in task creation (Head sets planned location) and completion (assignee logs actual location).
 - **Minutes text**: free text field, no formatting requirements specified — plain text area.
 - **Submission**: one primary submit button. On success, show the success popup and redirect — no intermediate confirmation dialog needed (the popup itself is the confirmation).
-- **Multi-completion display**: in the task detail view, each submitted completion is displayed as an independent locked card (one per submitter). A task can show 0 to N locked cards depending on how many assignees have submitted so far. RLS determines which cards are visible: Heads see all submitters' cards; Members see only their own card.
+- **Multi-completion display**: in the task detail view, each submitted completion is displayed as an independent locked card (one per submitter). A task can show 0 to N locked cards depending on how many assignees have submitted so far. **Visibility is gated by overall task completion state**: while the task is still `pending` (i.e. not every assignee has submitted yet), a Member can only see their **own** completion card in full — co-assignees' cards are not visible to them at all (not even redacted), only a status flag (submitted or not) via the roster (see section 5). Once **every** assignee on the task has submitted and the task flips to `completed`, full cross-visibility opens up for everyone assigned to that task — all completion cards, including photos, become visible to every co-assignee, not just the Head. This is all-or-nothing per task: there is no partial reveal while some assignees are still pending. Heads always see everything regardless of task state, as before.
 - **Form gate — per-user, not per-task**: the editable submission form is shown only when `completions.some(c => c.submitted_by === user.id) === false`. Task-level `status` is never used for this check — a task can still be `pending` overall while the current user has already submitted their own part.
-- **Simultaneous locked + form state**: for a partially-submitted multi-assignee task, a user who has not yet submitted will see any already-locked cards (from other submitters that RLS permits them to see) above their own editable form. Both sections coexist on the same page.
+- **Simultaneous locked + form state**: for a partially-submitted multi-assignee task, a user who has not yet submitted sees only their own editable form (no co-assignee cards yet, per the gate above) — once the task is fully completed, if this same page is revisited, all cards become visible per the completion-state gate.
 
 ---
 
@@ -80,11 +80,13 @@ This toggle changes which query is made (own-scoped vs. all-scoped), enforced by
 Update:
 Riwayat Laporan is no longer restricted to fully completed tasks only. For tasks with multiple assignees, the entry appears in Riwayat Laporan as soon as at least one assignee has submitted a completion — not only once all assignees have submitted. Each entry shows a per-assignee roster at the bottom: every assignee's name with their individual status, e.g. "Ahmad Fauzi — ✓ Selesai" / "Budi S. — Menunggu Dokumentasi." This lets a viewer (Member or Head, subject to existing RLS scoping) see who has and hasn't submitted their part of a shared task, without needing to separately check the Tugas list.
 
-A single-assignee task behaves as before: it appears once that one person submits, and the roster shows just that one name as complete.
+**Content visibility while incomplete vs. complete**: while a task is only partially submitted, a Member viewing this entry sees the roster (names + status only, via `get_task_completion_status()` per `schema.md`) but **cannot open or view a co-assignee's actual documentation** (minutes, photos, actual location) — only their own. Once every assignee has submitted and the task is `completed`, full documentation for every assignee on that task becomes visible to everyone assigned to it (not just the Head) — same page, same "Lihat Laporan Lengkap" flow, now unlocked for all. This applies identically whether reached from Riwayat Laporan or the task detail page, since "Lihat Laporan Lengkap" routes to the same underlying view either way.
+
+A single-assignee task behaves as before: it appears once that one person submits, and the roster shows just that one name as complete — the cross-visibility gate is moot with only one assignee.
 
 The task-level completed status (all assignees submitted) still governs whether the task is "locked" for editing purposes and whether it shows the "Selesai" badge elsewhere (Dashboard, Tugas list) — this Riwayat Laporan roster is a visibility/tracking change only, it does not affect when tasks.status itself flips to completed (that logic is unchanged from the earlier per-assignee completion trigger fix).
 
-RLS scoping is unchanged: a Member only sees rosters for tasks they're personally assigned to or created; a Head sees all, per the existing "Riwayat Anda / Riwayat Anggota" toggle.
+RLS scoping is unchanged for the roster/status layer: a Member only sees rosters for tasks they're personally assigned to or created; a Head sees all, per the existing "Riwayat Anda / Riwayat Anggota" toggle. Full-content visibility follows the new gate described above and in `schema.md`.
 
 ### Creator attribution (cross-Head visibility)
 
@@ -134,6 +136,7 @@ Replacing the original reference's intern-headcount bar chart (which didn't fit 
 - Izin status-change notifications are DB-trigger-driven, matching the completion-status trigger pattern, not an app-level insert.
 - Notifications use a `category`/`detail` structure instead of a flat type enum, for extensibility.
 - Both Head and Member receive live Realtime updates on Pengajuan Izin, not just the requester.
+- Cross-assignee completion visibility (content + photos) is gated by overall task completion: blocked entirely while any assignee is still pending, fully open to all assignees once the task is `completed`. Status-only roster (no content) is available anytime via `get_task_completion_status()`.
 
 ## 10. Still open
 

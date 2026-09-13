@@ -83,7 +83,14 @@ The "Completion" section a Member (or Head) fills out after doing the task — d
 | `actual_location_address` | text | reverse-geocoded label, stored so no re-fetch needed on reload |
 | `created_at` | timestamptz | default `now()` |
 
-One completion per (`task_id`, `submitted_by`) pair — enforced via a unique constraint on (`task_id`, `submitted_by`). Completions are **immutable once submitted**: INSERT restricted to users who are in `task_assignees` for that task; **no UPDATE policy exists for any role** (not even the submitter or a Head) — once sent, a completion cannot be edited or resubmitted. SELECT: own rows always; Heads can SELECT all.
+One completion per (`task_id`, `submitted_by`) pair — enforced via a unique constraint on (`task_id`, `submitted_by`). Completions are **immutable once submitted**: INSERT restricted to users who are in `task_assignees` for that task; **no UPDATE policy exists for any role** (not even the submitter or a Head) — once sent, a completion cannot be edited or resubmitted.
+
+**SELECT (updated — completion-state-gated cross-assignee visibility)**: a user can see a completion row if any of the following hold:
+- `submitted_by = auth.uid()` (always see your own), OR
+- `public.is_head()` (Heads always see all), OR
+- the requester is an assignee of the same task (`public.is_task_assignee_or_creator(task_id)`) **and** the parent `tasks.status = 'completed'` — i.e. every assignee on that task has submitted. Until the task reaches `completed`, co-assignees cannot see each other's completion content (minutes, times, location) at all — not even a partial/redacted view. Once *all* assignees have submitted, full cross-visibility opens up for everyone on that task, including Members.
+
+This full-content gate is intentionally all-or-nothing per task: no partial reveal while some assignees are still pending. For roster/status display (who has/hasn't submitted yet) while the task is still incomplete, see the new `get_task_completion_status()` RPC below — it exposes submission status only, never content, and is unaffected by this gate.
 
 ---
 
@@ -96,6 +103,8 @@ Multiple photos per completion (up to 8, enforced client-side + optionally a DB 
 | `completion_id` | uuid | FK → `task_completions.id`, cascade delete |
 | `storage_path` | text | path in Supabase Storage bucket, not the raw file |
 | `uploaded_at` | timestamptz | default `now()` |
+
+**SELECT (updated)**: mirrors `task_completions` SELECT exactly — own photos always; Head sees all; co-assignee sees all **only once the parent task's `status = 'completed'`** (every assignee has submitted). Same all-or-nothing gate, same RPC-based status-only exception for the incomplete case. This also applies to the Storage bucket policy (`completion_photos_read` on `storage.objects`) — it must be updated with the same task-status-gated condition, not just the table-level RLS, since photos are fetched via signed URLs from Storage directly.
 
 Storage bucket (e.g. `completion-photos`) should be private with signed URLs generated per-request, or public read if documentation photos are not sensitive — decide based on data sensitivity policy; default assumption here is **private bucket + signed URLs**.
 
@@ -151,6 +160,8 @@ Realtime enabled on this table so the client can subscribe and update the notifi
 - **`handle_task_completion_status`** — on `task_completions` insert, counts `total_assignees` vs `total_completions` for the task. Flips parent `tasks.status` to `'completed'` if and only if every assignee has submitted their completion (`total_completions >= total_assignees`).
 - **`handle_izin_status_notification`** — on `pengajuan_izin` UPDATE where `status` changes from `'pending'` to `'approved'` or `'rejected'`, inserts a `notifications` row for `user_id = pengajuan_izin.user_id` with `category = 'izin'` and `detail = 'disetujui'`/`'ditolak'` accordingly. Must be a database trigger, not an app-level insert — this guarantees the notification fires regardless of which code path changes the status (current UI, future admin tooling, direct SQL), matching the existing pattern used by `handle_task_completion_status`.
 
+- **`get_task_completion_status(p_task_id uuid)`** (new RPC, `SECURITY DEFINER`) — returns one row per assignee on the given task: `{user_id, full_name, has_submitted boolean}`. Exposes **submission status only** — never `minutes_text`, times, location, or photos. This is what powers the Riwayat Laporan / task detail roster ("Ahmad Fauzi — Selesai" / "Anisa Permata — Menunggu Dokumentasi") while the task is still incomplete and the completion-content RLS gate above is blocking direct content access between co-assignees. Callable by any assignee or the task creator (reuse `is_task_assignee_or_creator()` as the access check inside the function body). Once the task is fully `completed`, the frontend can just query `task_completions` directly (RLS now permits full cross-visibility), so this RPC is primarily needed for the "some submitted, some pending" state — but it's harmless to call in both states since it only ever returns status flags.
+
 ## 4. Realtime publication
 
 Tables in `supabase_realtime`: `notifications`, `tasks`, `task_completions`, and **`pengajuan_izin`** (this last one was missing from the original migration — confirmed by QA pass — and must be added: `ALTER PUBLICATION supabase_realtime ADD TABLE public.pengajuan_izin;`).
@@ -165,7 +176,7 @@ RLS must be **enabled on every table above**. General pattern:
 |---|---|---|
 | `profiles` | SELECT all, UPDATE own | SELECT all, UPDATE own |
 | `tasks` | INSERT, SELECT all, UPDATE own-created | SELECT own-assigned only |
-| `task_assignees` | INSERT/DELETE for tasks they created, SELECT all | SELECT own rows only |
+| `task_assignees` | INSERT/DELETE for tasks they created, SELECT all | SELECT all rows for tasks they're assigned to or created (co-assignee visibility — see resolved decisions) |
 | `task_completions` | SELECT all | INSERT own (must be an assignee), SELECT own only |
 | `completion_photos` | SELECT all (via completion join) | SELECT own only (via completion join) |
 | `pengajuan_izin` | SELECT all, UPDATE status (approve/reject) | INSERT own, SELECT own only |
@@ -215,6 +226,8 @@ The upload `WITH CHECK` policy on `storage.objects` must verify: the `completion
 - Both Head and Member get live Realtime updates on `pengajuan_izin` — not just the requesting Member.
 - Storage path convention confirmed as `{completion_id}/{timestamp}-{filename}`; read/upload RLS must key off `completion_id`, not user id.
 - Co-assignees do not see each other's completion photos — own-only, Head sees all.
+- **Task assignee list visibility (Bug 2 fix)**: any assignee or the creator of a task can see the **full list of co-assignees** on that task (via `is_task_assignee_or_creator()`, a `SECURITY DEFINER` helper avoiding RLS self-recursion on `task_assignees`). Root cause was RLS over-restricting reads to `user_id = auth.uid()` only, not a data-insertion bug — assignee rows were always being written correctly. This is distinct from photo privacy: seeing *who* is assigned to a shared task is not the same as seeing *their submitted photos*, which remain own-only per the item above.
+- **Cross-assignee completion content visibility is gated by task completion state**: while a task is `pending` (not all assignees submitted), co-assignees cannot see each other's completion content (minutes/times/location/photos) at all — only a status flag via `get_task_completion_status()`. Once the task reaches `completed` (every assignee submitted), full content becomes visible to every assignee on that task, not just the Head. All-or-nothing per task, no partial reveal.
 
 ## 8. Still open
 

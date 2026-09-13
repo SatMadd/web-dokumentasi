@@ -1,39 +1,31 @@
 -- ==============================================================================
--- DOOR (preserveD dOcumentatiOn progRam)
--- Database Setup & Storage Configuration Script
--- Run this script in the Supabase SQL Editor (Dashboard -> SQL Editor -> New Query)
+-- Migration: Cross-Assignee Completion Visibility Gate & RPC Function
+--
+-- 1. get_task_completion_status(p_task_id uuid) RPC function (SECURITY DEFINER):
+--    - Returns { user_id, full_name, has_submitted } for each assignee
+--    - Exposes submission status only — never minutes, times, location, or photos
+--    - Protected by access check: Head, or assignee/creator of the task
+--
+-- 2. task_completions SELECT RLS:
+--    - Submitter sees own row
+--    - Head sees all rows
+--    - Co-assignee sees all rows ONLY IF parent tasks.status = 'completed'
+--
+-- 3. completion_photos SELECT RLS:
+--    - Submitter sees own photos
+--    - Head sees all photos
+--    - Co-assignee sees all photos ONLY IF parent tasks.status = 'completed'
+--
+-- 4. Storage objects completion_photos_read policy:
+--    - Head sees all objects
+--    - Submitter sees own objects
+--    - Co-assignee sees objects ONLY IF parent tasks.status = 'completed'
+--
+-- 5. Storage objects completion_photos_upload policy:
+--    - Submitter only (submitted_by = auth.uid())
 -- ==============================================================================
 
--- 1. Enable pgcrypto extension for password hashing
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- 2. Create the check_user_exists RPC function for the Login page
-CREATE OR REPLACE FUNCTION public.check_user_exists(p_email text)
-RETURNS boolean
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = public, auth
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM auth.users WHERE lower(email) = lower(p_email)
-  );
-$$;
-
-GRANT EXECUTE ON FUNCTION public.check_user_exists(text) TO anon, authenticated;
-
--- 3. Ensure the completion-photos storage bucket exists (private bucket per schema.md section 6)
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-  'completion-photos',
-  'completion-photos',
-  false, -- Private bucket: signed URLs generated per-request
-  10485760, -- 10MB limit per file per logic.md section 3
-  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/jpg']
-)
-ON CONFLICT (id) DO UPDATE
-SET public = false, file_size_limit = 10485760;
-
--- 4. Helper function and policy for task_assignees co-visibility
+-- 1. Helper function is_task_assignee_or_creator
 CREATE OR REPLACE FUNCTION public.is_task_assignee_or_creator(p_task_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -52,18 +44,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.is_task_assignee_or_creator(uuid) TO authenticated;
 
-DROP POLICY IF EXISTS "task_assignees_select" ON public.task_assignees;
-
-CREATE POLICY "task_assignees_select"
-ON public.task_assignees FOR SELECT
-TO authenticated
-USING (
-  public.is_head()
-  OR user_id = auth.uid()
-  OR public.is_task_assignee_or_creator(task_id)
-);
-
--- 5. RPC function get_task_completion_status
+-- 2. RPC function get_task_completion_status
 CREATE OR REPLACE FUNCTION public.get_task_completion_status(p_task_id uuid)
 RETURNS TABLE (
   user_id uuid,
@@ -101,7 +82,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.get_task_completion_status(uuid) TO authenticated;
 
--- 6. Update task_completions SELECT RLS (cross-assignee gated by task completed status)
+-- 3. Update task_completions SELECT RLS
 DROP POLICY IF EXISTS "task_completions_select" ON public.task_completions;
 
 CREATE POLICY "task_completions_select"
@@ -120,7 +101,7 @@ USING (
   )
 );
 
--- 7. Update completion_photos SELECT RLS
+-- 4. Update completion_photos SELECT RLS
 DROP POLICY IF EXISTS "completion_photos_select" ON public.completion_photos;
 
 CREATE POLICY "completion_photos_select"
@@ -142,13 +123,10 @@ USING (
   )
 );
 
--- 8. Storage policies for completion-photos bucket
-DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
-DROP POLICY IF EXISTS "Allow public read" ON storage.objects;
-DROP POLICY IF EXISTS "completion_photos_upload" ON storage.objects;
+-- 5. Update completion_photos_read Storage policy on storage.objects
 DROP POLICY IF EXISTS "completion_photos_read" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public read" ON storage.objects;
 
--- Read policy: Heads see all; Members see own + co-assignees if completed
 CREATE POLICY "completion_photos_read"
 ON storage.objects FOR SELECT
 TO authenticated
@@ -172,7 +150,10 @@ USING (
   )
 );
 
--- Upload policy: Only actual submitter uploads to their completion folder
+-- 6. Update completion_photos_upload Storage policy on storage.objects
+DROP POLICY IF EXISTS "completion_photos_upload" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
+
 CREATE POLICY "completion_photos_upload"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -184,7 +165,3 @@ WITH CHECK (
       AND submitted_by = auth.uid()
   )
 );
-
--- 9. NOTE ON AUTH USER CREATION:
--- All user accounts must be created using the Supabase Admin API:
---   Run: node --env-file=.env.local scripts/seed.mjs

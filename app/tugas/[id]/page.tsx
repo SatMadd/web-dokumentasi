@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -13,6 +13,7 @@ import {
   User,
   FileCheck,
   AlertTriangle,
+  AlertCircle,
   CheckCircle2,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
@@ -53,6 +54,12 @@ interface CompletionWithDetails {
   photos: { id: string; storage_path: string }[];
 }
 
+interface AssigneeStatus {
+  user_id: string;
+  full_name: string;
+  has_submitted: boolean;
+}
+
 // -----------------------------------------------------------------------
 // Component
 // -----------------------------------------------------------------------
@@ -62,15 +69,20 @@ export default function TaskDetailPage() {
   const taskId = params?.id as string;
   const router = useRouter();
   const { user, profile, isHead } = useAuth();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [task, setTask] = useState<Task | null>(null);
-  /** All completions for this task — one per submitter */
+  /** All completions visible to the current user under RLS rules */
   const [completions, setCompletions] = useState<CompletionWithDetails[]>([]);
+  /** Status flags per assignee from get_task_completion_status RPC */
+  const [assigneeStatuses, setAssigneeStatuses] = useState<AssigneeStatus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Signed URLs keyed by photo.id — populated asynchronously for ALL completions
   const [signedPhotoUrls, setSignedPhotoUrls] = useState<Record<string, string>>({});
+
+  // Track if location has been initialized from task.planned_location so it is never overwritten on re-fetch
+  const hasInitializedLocationRef = useRef(false);
 
   // Completion form state
   const [actualStartTime, setActualStartTime] = useState("");
@@ -122,19 +134,18 @@ export default function TaskDetailPage() {
       } else if (taskData) {
         setTask(taskData as any);
 
-        // Pre-fill actual location with planned location as default
-        if (taskData.planned_location) {
+        // Pre-fill actual location with planned location ONLY on initial load
+        if (!hasInitializedLocationRef.current && taskData.planned_location) {
           setActualLocation({
             address: taskData.planned_location,
             lat: taskData.planned_location_lat,
             lng: taskData.planned_location_lng,
           });
+          hasInitializedLocationRef.current = true;
         }
       }
 
-      // 2. Fetch ALL completions for this task — one per assignee who has submitted.
-      //    Includes submitter profile and their photos.
-      //    RLS enforces: Heads see all rows; Members see only their own.
+      // 2. Fetch completions: RLS returns own row while pending; all rows once completed; Head always sees all
       const { data: completionsData, error: completionsError } = await supabase
         .from("task_completions")
         .select(`
@@ -151,20 +162,32 @@ export default function TaskDetailPage() {
       } else {
         setCompletions((completionsData ?? []) as CompletionWithDetails[]);
       }
+
+      // 3. Fetch RPC status per assignee via get_task_completion_status
+      try {
+        const { data: rpcStatuses, error: rpcError } = await supabase.rpc(
+          "get_task_completion_status",
+          { p_task_id: taskId }
+        );
+        if (!rpcError && rpcStatuses) {
+          setAssigneeStatuses(rpcStatuses as AssigneeStatus[]);
+        }
+      } catch (e) {
+        console.warn("RPC status fetch error:", e);
+      }
     } catch (err) {
       console.warn("Error loading task detail:", err);
     } finally {
       setIsLoading(false);
     }
-  }, [taskId, supabase, user, profile]);
+  }, [taskId, supabase]);
 
   useEffect(() => {
     loadTaskData();
   }, [loadTaskData]);
 
   // -----------------------------------------------------------------------
-  // Signed URLs — resolved for ALL photos across ALL completions
-  // (Fix 1: private bucket requires createSignedUrl, not getPublicUrl)
+  // Signed URLs — resolved for ALL photos across ALL visible completions
   // -----------------------------------------------------------------------
 
   useEffect(() => {
@@ -288,7 +311,7 @@ export default function TaskDetailPage() {
         ? new Date(`${taskStartDate}T${actualEndTime}`).toISOString()
         : null;
 
-      // 1. Insert into task_completions
+      // 1. Insert into task_completions with actual location (Bug 3 fix)
       const { data: compData, error: compError } = await supabase
         .from("task_completions")
         .insert({
@@ -340,10 +363,7 @@ export default function TaskDetailPage() {
         }
       }
 
-      // 3. Status update is handled automatically by DB trigger handle_task_completion_status
-      //    which flips tasks.status to 'completed' only when all assignees have submitted.
-
-      // 4. Show success popup per logic.md section 3
+      // 3. Show success popup per logic.md section 3
       setShowSuccessPopup(true);
     } catch (err: any) {
       console.error("Completion submit exception:", err);
@@ -357,10 +377,12 @@ export default function TaskDetailPage() {
   // Derived state
   // -----------------------------------------------------------------------
 
-  /** True if the current user already has their own completion row for this task */
-  const hasSubmitted = completions.some((c) => c.submitted_by === user?.id);
+  /** True if the current user already has their own completion submitted */
+  const hasSubmitted =
+    completions.some((c) => c.submitted_by === user?.id) ||
+    assigneeStatuses.some((s) => s.user_id === user?.id && s.has_submitted);
 
-  /** Task-level status badge — still derived from tasks.status (trigger-controlled) */
+  /** Task-level status badge — derived from tasks.status */
   const isTaskCompleted = task?.status === "completed";
 
   // -----------------------------------------------------------------------
@@ -485,13 +507,36 @@ export default function TaskDetailPage() {
             />
           </div>
 
-          {/* Assignees list */}
-          <div className="pt-2 border-t border-[var(--border)]">
-            <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
+          {/* Assignees list with live status indicators */}
+          <div className="pt-2 border-t border-[var(--border)] space-y-2">
+            <span className="text-xs font-medium text-[var(--text-secondary)] block">
               Petugas Pelaksana:
             </span>
             <div className="flex flex-wrap gap-2">
-              {(task as any).assignees && (task as any).assignees.length > 0 ? (
+              {assigneeStatuses.length > 0 ? (
+                assigneeStatuses.map((s) => (
+                  <div
+                    key={s.user_id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-full)] text-xs text-[var(--text-primary)]"
+                  >
+                    {s.has_submitted ? (
+                      <CheckCircle2 className="w-3 h-3 text-[var(--status-success)]" />
+                    ) : (
+                      <AlertCircle className="w-3 h-3 text-[var(--accent-orange)]" />
+                    )}
+                    <span>{s.full_name}</span>
+                    <span
+                      className={`text-[10px] ml-1 font-medium ${
+                        s.has_submitted
+                          ? "text-[var(--status-success)]"
+                          : "text-[var(--accent-orange)]"
+                      }`}
+                    >
+                      ({s.has_submitted ? "Selesai" : "Menunggu"})
+                    </span>
+                  </div>
+                ))
+              ) : (task as any).assignees && (task as any).assignees.length > 0 ? (
                 (task as any).assignees.map((a: any, i: number) => (
                   <div
                     key={i}
@@ -510,9 +555,9 @@ export default function TaskDetailPage() {
 
         {/* ── 2. Completion Section ── */}
 
-        {/* READ-ONLY LOCKED CARDS — one per assignee who has submitted
-            Per logic.md section 3: each card is independently immutable once submitted.
-            RLS: Heads see all; Members see only their own row. */}
+        {/* READ-ONLY LOCKED CARDS — gated by RLS
+            While task is pending: Member sees only own card; Head sees all.
+            Once task is completed: All assignees on the task see all cards and photos! */}
         {completions.length > 0 && (
           <div className="space-y-4">
             {/* Section header */}
@@ -563,7 +608,7 @@ export default function TaskDetailPage() {
                     Laporan ini telah tersimpan dan bersifat permanen — tidak dapat disunting kembali sesuai ketentuan integritas arsip DOOR.
                   </p>
 
-                  {/* Actual time & location */}
+                  {/* Actual time & location (Bug 3 fix) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
                     <div>
                       <span className="text-xs font-medium text-[var(--text-secondary)] block mb-1">
@@ -635,9 +680,7 @@ export default function TaskDetailPage() {
           </div>
         )}
 
-        {/* ── COMPLETION FORM — only shown when the current user has NOT yet submitted ──
-            Per logic.md section 3: check is per-user (hasSubmitted), not per task.status.
-            A task can simultaneously show locked cards for other submitters + this form. */}
+        {/* ── COMPLETION FORM — only shown when the current user has NOT yet submitted ── */}
         {!hasSubmitted && (
           <Card className="space-y-6">
             <div className="pb-3 border-b border-[var(--border)]">
