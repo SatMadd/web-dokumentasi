@@ -66,6 +66,16 @@ This replaced an earlier pill-based design — see `design.md` section 5 for the
 6. Below the last field is a **"Tambah" (add)** link. Tapping it appends a new, independent blank field, repeatable with **no upper limit** on number of assignees.
 7. Assignees can include both Members and other Heads — assignment direction is not restricted to "downward" only.
 
+### Editing assignees after creation (new)
+
+Motivation: a task's originally assigned person may go on approved leave (Pengajuan Izin) after the task was created, and the task needs to be reassigned or have coverage added. This feature has **no automated link** to the Pengajuan Izin approval flow — approving a leave request does not automatically trigger or suggest reassignment; a Head must manually go edit the task's assignees if a swap is needed. The two features are related in *purpose* only, not wired together in code.
+
+- **Who can edit**: any Head — not restricted to the task's original creator — can open a task and edit its assignee list, consistent with Heads already being able to view every task regardless of who created it.
+- **UI**: reuses the same stacked assignee-fields component from task creation (`design.md` section 5) — pre-filled with the task's current assignees, each row independently removable via its X control, with the same "Tambah" flow to add more via the assignee search page.
+- **Removal restriction**: an assignee who has **already submitted their completion** for this task cannot be removed — this is blocked at the RLS layer, not just hidden in the UI, since their submission is permanent history per the immutability rule (section 3). The UI should visually indicate (e.g. disable or omit the X control) that an already-submitted assignee's row is locked, rather than letting the user attempt a removal that will fail.
+- **Notifications**: removing an assignee sends them a `('tugas', 'dihapus')` notification; adding a new assignee sends the existing `('tugas', 'baru')` notification, same as initial task creation.
+- **No limit change**: the "at least implied but not hard-enforced" pattern from creation carries over — there's no explicit minimum assignee count enforced, consistent with task creation's existing behavior.
+
 ---
 
 ## 5. Head-specific dual views
@@ -110,8 +120,8 @@ Heads can see **every task**, including ones created by other Heads — not just
 ## 7. Notifications
 
 - Delivered via Supabase Realtime — live updates, not polling.
-- Structured as `category` (`'tugas'` | `'izin'`) + `detail` (`'baru'` for tugas, `'disetujui'` | `'ditolak'` for izin) rather than a single flat type string. Standardized on Indonesian minimal canonical pairs matching actual features: `('tugas', 'baru')`, `('izin', 'disetujui')`, `('izin', 'ditolak')`. See `schema.md` section 2 for the canonical pairs and their `CHECK` constraints.
-- Task-assignment notifications (`tugas`/`baru`) are inserted at the application level on task creation with explicit error checking. Izin status-change notifications (`izin`/`disetujui`, `izin`/`ditolak`) are inserted by a **database trigger** on `pengajuan_izin` (`handle_izin_status_notification`, see `schema.md` section 3), not app code — this ensures the notification fires no matter what changes the status.
+- Structured as `category` (`'tugas'` | `'izin'`) + `detail` (`'baru'` | `'dihapus'` for tugas; `'disetujui'` | `'ditolak'` for izin) rather than a single flat type string. Standardized on Indonesian minimal canonical pairs matching actual features: `('tugas', 'baru')`, `('tugas', 'dihapus')`, `('izin', 'disetujui')`, `('izin', 'ditolak')`. See `schema.md` section 2 for the canonical pairs and their `CHECK` constraints.
+- Task-assignment (`tugas`/`baru`) and task-unassignment (`tugas`/`dihapus`) notifications are inserted at the application level on task creation / assignee editing respectively, with explicit error checking. Izin status-change notifications (`izin`/`disetujui`, `izin`/`ditolak`) are inserted by a **database trigger** on `pengajuan_izin` (`handle_izin_status_notification`, see `schema.md` section 3), not app code — this ensures the notification fires no matter what changes the status.
 - Each notification belongs to exactly one recipient (`user_id`) and links back to the relevant task or leave request via `reference_id`.
 - Users can only see/mark-read their own notifications.
 
@@ -137,6 +147,7 @@ Replacing the original reference's intern-headcount bar chart (which didn't fit 
 - Notifications use a `category`/`detail` structure instead of a flat type enum, for extensibility.
 - Both Head and Member receive live Realtime updates on Pengajuan Izin, not just the requester.
 - Cross-assignee completion visibility (content + photos) is gated by overall task completion: blocked entirely while any assignee is still pending, fully open to all assignees once the task is `completed`. Status-only roster (no content) is available anytime via `get_task_completion_status()`.
+- Any Head (not just a task's creator) can edit its assignee list, to accommodate leave-driven reassignment; removal of an already-submitted assignee is blocked at RLS. Both removed and newly-added assignees are notified.
 
 ## 10. Still open
 

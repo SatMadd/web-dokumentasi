@@ -63,7 +63,11 @@ Join table — a task can have multiple assignees (Members and/or other Heads).
 | `user_id` | uuid | FK → `profiles.id` |
 | `assigned_at` | timestamptz | default `now()` |
 
-Composite PK (`task_id`, `user_id`). INSERT restricted to the task's `created_by` (a Head). A user can SELECT rows where `user_id = auth.uid()`, or any row if their own role is `head`.
+Composite PK (`task_id`, `user_id`). 
+
+**INSERT/DELETE (updated)**: any Head can add or remove assignees on **any** task — not restricted to the task's creator. **DELETE is blocked if the target assignee has already submitted a completion for that task** (`NOT EXISTS` a `task_completions` row for that `task_id`/`user_id` pair) — their submission is permanent history and removing them from the assignee list must not be possible once they've documented their part, per the completion immutability principle. Attempting to remove an already-submitted assignee must fail at the RLS layer, not just be hidden in the UI.
+
+A user can SELECT rows where `user_id = auth.uid()`, or any row if their own role is `head`, or any row for a task they're an assignee/creator of (`is_task_assignee_or_creator()` — see Bug 2 fix, section 7).
 
 ---
 
@@ -143,10 +147,11 @@ INSERT: any authenticated user, for themselves only. UPDATE (status/reviewed_by/
 
 Current canonical (`category`, `detail`) pairs:
 - `('tugas', 'baru')` — a task was assigned to this user
+- `('tugas', 'dihapus')` — this user was removed/unassigned from a task (new — assignee editing feature)
 - `('izin', 'disetujui')` — this user's leave request was approved
 - `('izin', 'ditolak')` — this user's leave request was rejected
 
-Standardized project-wide on Indonesian minimal set. Enforced via `CHECK ( (category = 'tugas' AND detail = 'baru') OR (category = 'izin' AND detail IN ('disetujui', 'ditolak')) )`.
+Standardized project-wide on Indonesian minimal set. Enforced via `CHECK ( (category = 'tugas' AND detail IN ('baru', 'dihapus')) OR (category = 'izin' AND detail IN ('disetujui', 'ditolak')) )`.
 
 INSERT: application-level on task creation for task assignees (with error checking); trigger-driven on izin status change. SELECT/UPDATE (mark read): only own rows (`user_id = auth.uid()`).
 
@@ -158,6 +163,7 @@ Realtime enabled on this table so the client can subscribe and update the notifi
 
 - **`handle_new_user`** — on `auth.users` insert, creates the corresponding `profiles` row (already implemented).
 - **`handle_task_completion_status`** — on `task_completions` insert, counts `total_assignees` vs `total_completions` for the task. Flips parent `tasks.status` to `'completed'` if and only if every assignee has submitted their completion (`total_completions >= total_assignees`).
+- **`handle_task_assignee_removed`** (new) — on `task_assignees` DELETE, re-runs the same `total_assignees` vs `total_completions` check for the affected `task_id` and flips `tasks.status` to `'completed'` if removing that assignee now means everyone remaining has submitted. Necessary because the assignee-editing feature (section 7 below) can remove a not-yet-submitted assignee, which may satisfy completion for the remaining group without any new `task_completions` insert occurring — the original trigger only fires on that insert, so it would never re-check the count on its own. Should reuse the same counting logic as `handle_task_completion_status` (extract to a shared function if convenient, to avoid duplicating the comparison logic).
 - **`handle_izin_status_notification`** — on `pengajuan_izin` UPDATE where `status` changes from `'pending'` to `'approved'` or `'rejected'`, inserts a `notifications` row for `user_id = pengajuan_izin.user_id` with `category = 'izin'` and `detail = 'disetujui'`/`'ditolak'` accordingly. Must be a database trigger, not an app-level insert — this guarantees the notification fires regardless of which code path changes the status (current UI, future admin tooling, direct SQL), matching the existing pattern used by `handle_task_completion_status`.
 
 - **`get_task_completion_status(p_task_id uuid)`** (new RPC, `SECURITY DEFINER`) — returns one row per assignee on the given task: `{user_id, full_name, has_submitted boolean}`. Exposes **submission status only** — never `minutes_text`, times, location, or photos. This is what powers the Riwayat Laporan / task detail roster ("Ahmad Fauzi — Selesai" / "Anisa Permata — Menunggu Dokumentasi") while the task is still incomplete and the completion-content RLS gate above is blocking direct content access between co-assignees. Callable by any assignee or the task creator (reuse `is_task_assignee_or_creator()` as the access check inside the function body). Once the task is fully `completed`, the frontend can just query `task_completions` directly (RLS now permits full cross-visibility), so this RPC is primarily needed for the "some submitted, some pending" state — but it's harmless to call in both states since it only ever returns status flags.
@@ -176,7 +182,7 @@ RLS must be **enabled on every table above**. General pattern:
 |---|---|---|
 | `profiles` | SELECT all, UPDATE own | SELECT all, UPDATE own |
 | `tasks` | INSERT, SELECT all, UPDATE own-created | SELECT own-assigned only |
-| `task_assignees` | INSERT/DELETE for tasks they created, SELECT all | SELECT all rows for tasks they're assigned to or created (co-assignee visibility — see resolved decisions) |
+| `task_assignees` | INSERT/DELETE on any task (any Head, not just creator); DELETE blocked if target already submitted a completion; SELECT all | SELECT all rows for tasks they're assigned to or created (co-assignee visibility — see resolved decisions) |
 | `task_completions` | SELECT all | INSERT own (must be an assignee), SELECT own only |
 | `completion_photos` | SELECT all (via completion join) | SELECT own only (via completion join) |
 | `pengajuan_izin` | SELECT all, UPDATE status (approve/reject) | INSERT own, SELECT own only |
@@ -228,6 +234,7 @@ The upload `WITH CHECK` policy on `storage.objects` must verify: the `completion
 - Co-assignees do not see each other's completion photos — own-only, Head sees all.
 - **Task assignee list visibility (Bug 2 fix)**: any assignee or the creator of a task can see the **full list of co-assignees** on that task (via `is_task_assignee_or_creator()`, a `SECURITY DEFINER` helper avoiding RLS self-recursion on `task_assignees`). Root cause was RLS over-restricting reads to `user_id = auth.uid()` only, not a data-insertion bug — assignee rows were always being written correctly. This is distinct from photo privacy: seeing *who* is assigned to a shared task is not the same as seeing *their submitted photos*, which remain own-only per the item above.
 - **Cross-assignee completion content visibility is gated by task completion state**: while a task is `pending` (not all assignees submitted), co-assignees cannot see each other's completion content (minutes/times/location/photos) at all — only a status flag via `get_task_completion_status()`. Once the task reaches `completed` (every assignee submitted), full content becomes visible to every assignee on that task, not just the Head. All-or-nothing per task, no partial reveal.
+- **Assignee editing (new feature)**: any Head — not just the task's creator — can add or remove assignees on any task, primarily to accommodate leave (Pengajuan Izin) coverage swaps. Removing an assignee who has already submitted a completion for that task is blocked at the RLS layer (their submission is permanent history). Both the removed and newly added person receive a notification (`('tugas','dihapus')` / `('tugas','baru')` respectively). Removing a not-yet-submitted assignee triggers a status re-check (`handle_task_assignee_removed`) — if everyone remaining has already submitted, the task auto-flips to `completed` immediately, without waiting for a new completion insert.
 
 ## 8. Still open
 

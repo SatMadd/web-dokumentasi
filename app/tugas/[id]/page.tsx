@@ -11,6 +11,9 @@ import {
   Camera,
   X,
   User,
+  Users,
+  Plus,
+  Lock,
   FileCheck,
   AlertTriangle,
   AlertCircle,
@@ -21,10 +24,11 @@ import { Card, Input, Textarea } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LocationPicker } from "@/components/map/LocationPicker";
+import { AssigneeSearchModal } from "@/components/tugas/AssigneeSearchModal";
 import { SuccessPopup } from "@/components/ui/SuccessPopup";
 import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
-import { Task } from "@/types/database";
+import { Task, Profile } from "@/types/database";
 
 // -----------------------------------------------------------------------
 // Types
@@ -58,6 +62,12 @@ interface AssigneeStatus {
   user_id: string;
   full_name: string;
   has_submitted: boolean;
+}
+
+interface EditAssigneeRow {
+  id: string;
+  user: Profile | null;
+  hasSubmitted: boolean;
 }
 
 // -----------------------------------------------------------------------
@@ -104,6 +114,14 @@ export default function TaskDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+
+  // Head-Editable Task Assignees state
+  const [isEditingAssignees, setIsEditingAssignees] = useState(false);
+  const [editAssigneeRows, setEditAssigneeRows] = useState<EditAssigneeRow[]>([]);
+  const [activeRowIdForSearch, setActiveRowIdForSearch] = useState<string | null>(null);
+  const [isSavingAssignees, setIsSavingAssignees] = useState(false);
+  const [editAssigneeError, setEditAssigneeError] = useState<string | null>(null);
+  const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
 
   // -----------------------------------------------------------------------
   // Data loading
@@ -374,6 +392,198 @@ export default function TaskDetailPage() {
   };
 
   // -----------------------------------------------------------------------
+  // Head: Edit Assignees handlers
+  // -----------------------------------------------------------------------
+
+  const handleOpenEditAssignees = () => {
+    const currentAssignees = ((task as any)?.assignees ?? []).map((a: any, idx: number) => {
+      const prof: Profile = a.profile || {
+        id: a.user_id,
+        full_name: "Petugas",
+        role: "member",
+        division: "Umum",
+        avatar_url: null,
+        created_at: "",
+      };
+      const isSubmitted =
+        assigneeStatuses.some((s) => s.user_id === a.user_id && s.has_submitted) ||
+        completions.some((c) => c.submitted_by === a.user_id);
+
+      return {
+        id: `row-${a.user_id}-${idx}`,
+        user: prof,
+        hasSubmitted: isSubmitted,
+      };
+    });
+
+    setEditAssigneeRows(
+      currentAssignees.length > 0
+        ? currentAssignees
+        : [{ id: `row-${Date.now()}`, user: null, hasSubmitted: false }]
+    );
+    setEditAssigneeError(null);
+    setIsEditingAssignees(true);
+  };
+
+  const handleAddEditAssigneeRow = () => {
+    setEditAssigneeRows((prev) => [
+      ...prev,
+      {
+        id: `row-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        user: null,
+        hasSubmitted: false,
+      },
+    ]);
+  };
+
+  const handleRemoveEditAssigneeRow = (rowId: string) => {
+    const target = editAssigneeRows.find((r) => r.id === rowId);
+    if (target?.hasSubmitted) {
+      setEditAssigneeError("Petugas yang telah mengunggah laporan dokumentasi tidak dapat dihapus.");
+      return;
+    }
+
+    if (editAssigneeRows.length === 1) {
+      setEditAssigneeRows([{ id: rowId, user: null, hasSubmitted: false }]);
+    } else {
+      setEditAssigneeRows((prev) => prev.filter((r) => r.id !== rowId));
+    }
+  };
+
+  const handleSelectAssigneeForEdit = (selectedUser: Profile) => {
+    if (!activeRowIdForSearch) return;
+    setEditAssigneeRows((prev) =>
+      prev.map((r) =>
+        r.id === activeRowIdForSearch
+          ? {
+              ...r,
+              user: selectedUser,
+              hasSubmitted:
+                assigneeStatuses.some((s) => s.user_id === selectedUser.id && s.has_submitted) ||
+                completions.some((c) => c.submitted_by === selectedUser.id),
+            }
+          : r
+      )
+    );
+    setActiveRowIdForSearch(null);
+  };
+
+  const handleSaveAssignees = async () => {
+    setEditAssigneeError(null);
+    const validUsers = editAssigneeRows
+      .map((r) => r.user)
+      .filter((u): u is Profile => u !== null);
+
+    if (validUsers.length === 0) {
+      setEditAssigneeError("Minimal harus ada satu petugas pelaksana.");
+      return;
+    }
+
+    // Deduplicate users
+    const uniqueUsers: Profile[] = [];
+    const seenIds = new Set<string>();
+    for (const u of validUsers) {
+      if (!seenIds.has(u.id)) {
+        seenIds.add(u.id);
+        uniqueUsers.push(u);
+      }
+    }
+
+    const originalUserIds: string[] = ((task as any)?.assignees ?? []).map((a: any) => a.user_id);
+    const newUserIds = uniqueUsers.map((u) => u.id);
+
+    const addedUsers = uniqueUsers.filter((u) => !originalUserIds.includes(u.id));
+    const removedUserIds = originalUserIds.filter((id) => !newUserIds.includes(id));
+
+    // Guard: Prevent removal of already submitted assignees
+    for (const rid of removedUserIds) {
+      const hasSub =
+        assigneeStatuses.some((s) => s.user_id === rid && s.has_submitted) ||
+        completions.some((c) => c.submitted_by === rid);
+      if (hasSub) {
+        setEditAssigneeError(
+          "Tidak dapat menghapus petugas yang telah menyelesaikan dan mengunggah dokumentasi."
+        );
+        return;
+      }
+    }
+
+    if (addedUsers.length === 0 && removedUserIds.length === 0) {
+      setIsEditingAssignees(false);
+      return;
+    }
+
+    setIsSavingAssignees(true);
+
+    try {
+      // 1. Insert new assignees
+      if (addedUsers.length > 0) {
+        const inserts = addedUsers.map((u) => ({
+          task_id: taskId,
+          user_id: u.id,
+        }));
+        const { error: insErr } = await supabase.from("task_assignees").insert(inserts);
+        if (insErr) {
+          throw new Error(`Gagal menambahkan petugas: ${insErr.message}`);
+        }
+
+        // 2. Insert notifications for added assignees ('tugas', 'baru')
+        const notifInserts = addedUsers.map((u) => ({
+          user_id: u.id,
+          category: "tugas" as const,
+          detail: "baru" as const,
+          reference_id: taskId,
+          message: `Anda telah ditugaskan ke: ${task?.title}`,
+          is_read: false,
+        }));
+        const { error: notifErr } = await supabase.from("notifications").insert(notifInserts);
+        if (notifErr) {
+          console.warn("Gagal mengirim notifikasi penugasan baru:", notifErr.message);
+        }
+      }
+
+      // 3. Delete removed assignees
+      if (removedUserIds.length > 0) {
+        for (const uid of removedUserIds) {
+          const { error: delErr } = await supabase
+            .from("task_assignees")
+            .delete()
+            .eq("task_id", taskId)
+            .eq("user_id", uid);
+          if (delErr) {
+            throw new Error(`Gagal menghapus penugasan: ${delErr.message}`);
+          }
+        }
+
+        // 4. Insert notifications for removed assignees ('tugas', 'dihapus')
+        const notifsToRemove = removedUserIds.map((uid) => ({
+          user_id: uid,
+          category: "tugas" as const,
+          detail: "dihapus" as const,
+          reference_id: taskId,
+          message: `Anda telah dihapus dari penugasan: ${task?.title}`,
+          is_read: false,
+        }));
+        const { error: delNotifErr } = await supabase.from("notifications").insert(notifsToRemove);
+        if (delNotifErr) {
+          console.warn("Gagal mengirim notifikasi pembatalan penugasan:", delNotifErr.message);
+        }
+      }
+
+      // 5. Reload task data to re-evaluate completion status and roster
+      await loadTaskData();
+      setIsEditingAssignees(false);
+      setEditSuccessMsg("Daftar petugas pelaksana berhasil diperbarui.");
+      setTimeout(() => setEditSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Save assignees error:", err);
+      setEditAssigneeError(err?.message || "Terjadi kesalahan saat memperbarui petugas.");
+    } finally {
+      setIsSavingAssignees(false);
+    }
+  };
+
+  // -----------------------------------------------------------------------
   // Derived state
   // -----------------------------------------------------------------------
 
@@ -507,11 +717,38 @@ export default function TaskDetailPage() {
             />
           </div>
 
-          {/* Assignees list with live status indicators */}
+          {/* Assignees list with live status indicators & Head edit affordance */}
           <div className="pt-2 border-t border-[var(--border)] space-y-2">
-            <span className="text-xs font-medium text-[var(--text-secondary)] block">
-              Petugas Pelaksana:
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--text-secondary)] block">
+                Petugas Pelaksana:
+              </span>
+              {isHead && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleOpenEditAssignees}
+                  className="h-7 text-xs px-2.5 py-1 text-[var(--accent-blue)] border-[var(--border)] hover:border-[var(--accent-blue)]/50"
+                  icon={<Users className="w-3.5 h-3.5" />}
+                >
+                  Edit Petugas
+                </Button>
+              )}
+            </div>
+
+            {editSuccessMsg && (
+              <div className="p-2.5 bg-[var(--status-success)]/10 border border-[var(--status-success)]/30 rounded-[var(--radius-sm)] text-xs text-[var(--status-success)] flex items-center justify-between">
+                <span>{editSuccessMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setEditSuccessMsg(null)}
+                  className="text-[var(--status-success)] hover:opacity-80"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2">
               {assigneeStatuses.length > 0 ? (
                 assigneeStatuses.map((s) => (
@@ -806,6 +1043,181 @@ export default function TaskDetailPage() {
           </Card>
         )}
       </div>
+
+      {/* ── Edit Assignees Modal (Head Only) ── */}
+      {isHead && isEditingAssignees && (
+        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-lg)] shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                  <Users className="w-4 h-4 text-[var(--accent-blue)]" />
+                  Ubah Petugas Pelaksana
+                </h3>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  Sesuaikan daftar petugas yang ditugaskan untuk kegiatan ini.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isSavingAssignees && setIsEditingAssignees(false)}
+                className="p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] rounded-[var(--radius-sm)] transition-colors"
+                aria-label="Tutup modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 overflow-y-auto space-y-4 flex-1">
+              {editAssigneeError && (
+                <div className="p-3 bg-[var(--accent-red)]/15 border border-[var(--accent-red)]/30 rounded-[var(--radius-md)] text-xs text-[var(--accent-red)] flex items-center justify-between">
+                  <span>{editAssigneeError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditAssigneeError(null)}
+                    className="text-[var(--accent-red)] hover:opacity-80"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-[var(--text-secondary)]">
+                    Daftar Petugas Ditugaskan
+                  </label>
+                  <span className="text-[11px] text-[var(--text-secondary)]">
+                    {editAssigneeRows.filter((r) => r.user !== null).length} petugas
+                  </span>
+                </div>
+
+                {/* Stacked Assignee Rows matching task creation */}
+                <div className="space-y-2.5">
+                  {editAssigneeRows.map((row) => {
+                    const hasUser = row.user !== null;
+                    return (
+                      <div key={row.id} className="relative flex items-center gap-2">
+                        {hasUser ? (
+                          <div className="flex-1 flex items-center justify-between bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-md)] px-3.5 py-2.5 min-h-[44px]">
+                            <div className="flex items-center gap-2.5 overflow-hidden">
+                              <div className="w-6 h-6 rounded-full bg-[var(--accent-blue-strong)] text-[var(--accent-blue-soft)] flex items-center justify-center text-[11px] font-semibold shrink-0">
+                                {(row.user?.full_name || "A").charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex flex-col overflow-hidden">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-[var(--text-primary)] truncate">
+                                    {row.user?.full_name}
+                                  </span>
+                                  {row.hasSubmitted && (
+                                    <Badge variant="green" size="sm" className="shrink-0 text-[10px] py-0 px-1.5 h-4">
+                                      <Lock className="w-2.5 h-2.5 mr-1" />
+                                      Terkunci (Sudah Lapor)
+                                    </Badge>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-[var(--text-secondary)] truncate">
+                                  {row.user?.division || "Umum"} • {row.user?.role === "head" ? "Kepala" : "Anggota"}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* If already submitted: locked (no X delete control), otherwise show X remove */}
+                            {row.hasSubmitted ? (
+                              <div
+                                className="p-1 text-[var(--text-secondary)]/50 cursor-not-allowed flex items-center justify-center min-h-[32px] min-w-[32px]"
+                                title="Petugas ini telah mengunggah dokumentasi pelaksanaan dan tidak dapat dihapus."
+                              >
+                                <Lock className="w-4 h-4" />
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveEditAssigneeRow(row.id)}
+                                className="p-1 text-[var(--text-secondary)] hover:text-[var(--accent-red)] rounded-[var(--radius-sm)] transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
+                                title="Hapus petugas ini"
+                                aria-label="Hapus petugas ini"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setActiveRowIdForSearch(row.id)}
+                            className="flex-1 flex items-center justify-between border-2 border-dashed border-[var(--border)] hover:border-[var(--accent-blue)]/70 bg-[var(--surface)] hover:bg-[var(--surface-hover)] rounded-[var(--radius-md)] px-3.5 py-2.5 min-h-[44px] text-left transition-colors group"
+                          >
+                            <span className="text-sm text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
+                              Cari nama anggota atau kepala...
+                            </span>
+                            <span className="text-xs text-[var(--accent-blue)] group-hover:underline">
+                              Pilih Nama →
+                            </span>
+                          </button>
+                        )}
+
+                        {!hasUser && editAssigneeRows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEditAssigneeRow(row.id)}
+                            className="p-2 text-[var(--text-secondary)] hover:text-[var(--accent-red)]"
+                            title="Hapus baris kosong"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Add Row Button */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleAddEditAssigneeRow}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--accent-blue)] hover:text-[var(--accent-blue-strong)] hover:underline"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tambah Penerima Penugasan</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-[var(--surface-hover)] border-t border-[var(--border)] flex items-center justify-end gap-2.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setIsEditingAssignees(false)}
+                disabled={isSavingAssignees}
+              >
+                Batal
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSaveAssignees}
+                isLoading={isSavingAssignees}
+              >
+                Simpan Perubahan
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated Fullscreen Assignee Search Modal per logic.md section 4 */}
+      <AssigneeSearchModal
+        isOpen={activeRowIdForSearch !== null}
+        onClose={() => setActiveRowIdForSearch(null)}
+        onSelect={handleSelectAssigneeForEdit}
+        selectedIds={editAssigneeRows.map((r) => r.user?.id).filter((id): id is string => !!id)}
+      />
 
       {/* Success Popup — shown only after confirmed successful database insert */}
       <SuccessPopup

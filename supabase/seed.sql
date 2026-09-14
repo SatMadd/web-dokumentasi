@@ -33,7 +33,7 @@ VALUES (
 ON CONFLICT (id) DO UPDATE
 SET public = false, file_size_limit = 10485760;
 
--- 4. Helper function and policy for task_assignees co-visibility
+-- 4. Helper function and policy for task_assignees co-visibility and management
 CREATE OR REPLACE FUNCTION public.is_task_assignee_or_creator(p_task_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -53,7 +53,6 @@ $$;
 GRANT EXECUTE ON FUNCTION public.is_task_assignee_or_creator(uuid) TO authenticated;
 
 DROP POLICY IF EXISTS "task_assignees_select" ON public.task_assignees;
-
 CREATE POLICY "task_assignees_select"
 ON public.task_assignees FOR SELECT
 TO authenticated
@@ -62,6 +61,97 @@ USING (
   OR user_id = auth.uid()
   OR public.is_task_assignee_or_creator(task_id)
 );
+
+-- Task assignees INSERT: any Head can assign
+DROP POLICY IF EXISTS "task_assignees_insert" ON public.task_assignees;
+CREATE POLICY "task_assignees_insert"
+ON public.task_assignees FOR INSERT
+TO authenticated
+WITH CHECK (public.is_head());
+
+-- Task assignees DELETE: any Head can delete UNLESS target already submitted completion
+DROP POLICY IF EXISTS "task_assignees_delete" ON public.task_assignees;
+CREATE POLICY "task_assignees_delete"
+ON public.task_assignees FOR DELETE
+TO authenticated
+USING (
+  public.is_head()
+  AND NOT EXISTS (
+    SELECT 1 FROM public.task_completions tc
+    WHERE tc.task_id = public.task_assignees.task_id
+      AND tc.submitted_by = public.task_assignees.user_id
+  )
+);
+
+-- 4b. Shared function to evaluate task completion status & triggers
+CREATE OR REPLACE FUNCTION public.evaluate_task_completion_status(p_task_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  total_assignees int;
+  total_completions int;
+BEGIN
+  SELECT COUNT(*) INTO total_assignees
+  FROM public.task_assignees
+  WHERE task_id = p_task_id;
+
+  SELECT COUNT(*) INTO total_completions
+  FROM public.task_completions
+  WHERE task_id = p_task_id;
+
+  IF total_assignees > 0 AND total_completions >= total_assignees THEN
+    UPDATE public.tasks
+    SET status = 'completed'
+    WHERE id = p_task_id AND status != 'completed';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.handle_task_completion_status()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  PERFORM public.evaluate_task_completion_status(NEW.task_id);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_task_completion_inserted ON public.task_completions;
+CREATE TRIGGER on_task_completion_inserted
+  AFTER INSERT ON public.task_completions
+  FOR EACH ROW EXECUTE FUNCTION public.handle_task_completion_status();
+
+CREATE OR REPLACE FUNCTION public.handle_task_assignee_removed()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  PERFORM public.evaluate_task_completion_status(OLD.task_id);
+  RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_task_assignee_removed ON public.task_assignees;
+CREATE TRIGGER on_task_assignee_removed
+  AFTER DELETE ON public.task_assignees
+  FOR EACH ROW EXECUTE FUNCTION public.handle_task_assignee_removed();
+
+-- 4c. Update notifications CHECK constraint
+ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_category_detail_check;
+ALTER TABLE public.notifications
+  ADD CONSTRAINT notifications_category_detail_check
+  CHECK (
+    (category = 'tugas' AND detail IN ('baru', 'dihapus')) OR
+    (category = 'izin' AND detail IN ('disetujui', 'ditolak'))
+  );
 
 -- 5. RPC function get_task_completion_status
 CREATE OR REPLACE FUNCTION public.get_task_completion_status(p_task_id uuid)
