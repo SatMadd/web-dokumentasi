@@ -146,6 +146,36 @@ export default function TaskDetailPage() {
   };
 
   // -----------------------------------------------------------------------
+  // Photo helpers — MIME normalisation & HEIC detection
+  // -----------------------------------------------------------------------
+
+  /** Derive a reliable MIME type from a filename extension when file.type is empty/wrong. */
+  function getMimeFromExtension(filename: string): string {
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    const map: Record<string, string> = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      gif: "image/gif",
+      heic: "image/heic",
+      heif: "image/heif",
+    };
+    return map[ext] ?? "image/jpeg";
+  }
+
+  /**
+   * Returns true for HEIC/HEIF files — which browsers cannot decode natively.
+   * Detects by MIME type OR extension (because some OSes report file.type = "" for HEIC).
+   */
+  function isHeicFile(file: File): boolean {
+    const heicMimes = ["image/heic", "image/heif"];
+    if (heicMimes.includes(file.type.toLowerCase())) return true;
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    return ext === "heic" || ext === "heif";
+  }
+
+  // -----------------------------------------------------------------------
   // Data loading
   // -----------------------------------------------------------------------
 
@@ -273,10 +303,25 @@ export default function TaskDetailPage() {
   // Photo upload validation per logic.md section 3
   // -----------------------------------------------------------------------
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Async photo selection handler — handles three cases:
+   *   1. HEIC/HEIF → convert to JPEG client-side via heic2any before queuing.
+   *   2. .jpg with empty file.type (Windows quirk) → normalise MIME type.
+   *   3. All other accepted formats (jpeg, png, webp) → pass through normally.
+   *
+   * Must be async because heic2any is a Promise-based API.
+   * React synthetic event is consumed synchronously before the first await.
+   */
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setPhotoError(null);
     const files = e.target.files;
     if (!files || files.length === 0) return;
+
+    // Reset the input value synchronously before any awaits — React pools
+    // synthetic events and the value would be cleared anyway, but doing it
+    // here explicitly avoids any stale-event issues.
+    const fileList = Array.from(files);
+    e.target.value = "";
 
     const remainingSlots = 8 - photos.length;
     if (remainingSlots <= 0) {
@@ -284,19 +329,57 @@ export default function TaskDetailPage() {
       return;
     }
 
-    const selectedList = Array.from(files);
     const newValidPhotos: UploadedPhoto[] = [];
 
-    for (const file of selectedList) {
+    for (const rawFile of fileList) {
       if (newValidPhotos.length >= remainingSlots) {
         setPhotoError("Hanya maksimal 8 foto yang dapat diunggah.");
         break;
       }
 
-      // Check 10MB limit (10 * 1024 * 1024 bytes)
+      let file: File = rawFile;
+
+      // ── HEIC/HEIF: convert to JPEG client-side ──────────────────────────
+      if (isHeicFile(rawFile)) {
+        try {
+          // Dynamic import avoids SSR issues (heic2any relies on browser WASM)
+          const heic2any = (await import("heic2any")).default;
+          const converted = await heic2any({
+            blob: rawFile,
+            toType: "image/jpeg",
+            quality: 0.92,
+          });
+          // heic2any may return a Blob or Blob[] (for multi-image HEIC)
+          const blob = Array.isArray(converted) ? converted[0] : converted;
+          const newName = rawFile.name.replace(/\.heic$/i, ".jpg").replace(/\.heif$/i, ".jpg");
+          file = new File([blob], newName, { type: "image/jpeg" });
+        } catch (convErr) {
+          console.error("HEIC conversion failed:", convErr);
+          setPhotoError(
+            `File "${rawFile.name}" tidak dapat dikonversi. Pastikan berkas HEIC tidak rusak, lalu coba lagi.`
+          );
+          continue; // skip this file, continue with remaining
+        }
+      }
+
+      // ── Size check (10MB) ───────────────────────────────────────────────
       if (file.size > 10 * 1024 * 1024) {
-        setPhotoError(`File "${file.name}" melebihi batas ukuran 10MB.`);
+        setPhotoError(`File "${rawFile.name}" melebihi batas ukuran 10MB.`);
         continue;
+      }
+
+      // ── MIME normalisation: fix empty file.type (Windows .jpg quirk) ───
+      // Some Windows browsers report file.type = "" for .jpg files.
+      // We need a valid MIME type string for the Storage upload Content-Type header.
+      const resolvedMime: string =
+        file.type && file.type !== "application/octet-stream"
+          ? file.type
+          : getMimeFromExtension(file.name);
+
+      // If the MIME type changed, re-wrap the file so file.type is correct
+      // for downstream use (including the upload contentType parameter).
+      if (resolvedMime !== file.type) {
+        file = new File([file], file.name, { type: resolvedMime });
       }
 
       const previewUrl = URL.createObjectURL(file);
@@ -309,8 +392,9 @@ export default function TaskDetailPage() {
       });
     }
 
-    setPhotos((prev) => [...prev, ...newValidPhotos]);
-    e.target.value = "";
+    if (newValidPhotos.length > 0) {
+      setPhotos((prev) => [...prev, ...newValidPhotos]);
+    }
   };
 
   const removePhoto = (photoId: string) => {
@@ -384,10 +468,18 @@ export default function TaskDetailPage() {
           const cleanName = p.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `${completionId}/${Date.now()}-${cleanName}`;
 
+          // Always pass a valid non-empty Content-Type — guards against the
+          // edge case where file.type is still empty after normalisation
+          // (e.g. a file added programmatically without a type attribute).
+          const uploadMime =
+            p.file.type && p.file.type !== "application/octet-stream"
+              ? p.file.type
+              : getMimeFromExtension(p.name);
+
           const { error: uploadError } = await supabase.storage
             .from("completion-photos")
             .upload(storagePath, p.file, {
-              contentType: p.file.type || undefined,
+              contentType: uploadMime,
               upsert: true,
             });
 
@@ -1032,7 +1124,7 @@ export default function TaskDetailPage() {
                       </span>
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/*,.heic,.heif"
                         multiple
                         onChange={handlePhotoSelect}
                         className="hidden"
@@ -1042,7 +1134,7 @@ export default function TaskDetailPage() {
                 </div>
 
                 <p className="text-[11px] text-[var(--text-secondary)]">
-                  Format yang didukung: JPG, PNG, WEBP. Maksimal 10MB per berkas.
+                  Format yang didukung: JPG, JPEG, PNG, WEBP. Foto HEIC (iPhone) dikonversi otomatis ke JPEG. Maksimal 10MB per berkas.
                 </p>
               </div>
 
