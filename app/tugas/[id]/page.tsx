@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   AlertCircle,
   CheckCircle2,
+  Maximize2,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, Input, Textarea } from "@/components/ui/Card";
@@ -26,6 +27,7 @@ import { Button } from "@/components/ui/Button";
 import { LocationPicker } from "@/components/map/LocationPicker";
 import { AssigneeSearchModal } from "@/components/tugas/AssigneeSearchModal";
 import { SuccessPopup } from "@/components/ui/SuccessPopup";
+import { PhotoLightbox, LightboxPhoto } from "@/components/ui/PhotoLightbox";
 import { useAuth } from "@/lib/context/auth-context";
 import { createClient } from "@/lib/supabase/client";
 import { Task, Profile } from "@/types/database";
@@ -122,6 +124,26 @@ export default function TaskDetailPage() {
   const [isSavingAssignees, setIsSavingAssignees] = useState(false);
   const [editAssigneeError, setEditAssigneeError] = useState<string | null>(null);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+
+  // Lightbox state for full-size photo viewing
+  const [lightboxPhotos, setLightboxPhotos] = useState<LightboxPhoto[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+
+  // Track image load errors per photo ID
+  const [imageErrorMap, setImageErrorMap] = useState<Record<string, boolean>>({});
+
+  const handleOpenLightbox = (photosList: { id: string; storage_path: string }[], clickedIndex: number) => {
+    const prepared: LightboxPhoto[] = photosList.map((p) => ({
+      id: p.id,
+      storage_path: p.storage_path,
+      signedUrl: signedPhotoUrls[p.id],
+      name: p.storage_path.split("/").pop(),
+    }));
+    setLightboxPhotos(prepared);
+    setLightboxIndex(clickedIndex);
+    setIsLightboxOpen(true);
+  };
 
   // -----------------------------------------------------------------------
   // Data loading
@@ -364,7 +386,10 @@ export default function TaskDetailPage() {
 
           const { error: uploadError } = await supabase.storage
             .from("completion-photos")
-            .upload(storagePath, p.file);
+            .upload(storagePath, p.file, {
+              contentType: p.file.type || undefined,
+              upsert: true,
+            });
 
           if (uploadError) {
             console.warn(`Storage upload warning for ${p.name}:`, uploadError.message);
@@ -875,36 +900,65 @@ export default function TaskDetailPage() {
                     </div>
                   </div>
 
-                  {/* Photos — signed URLs from the shared map */}
+                  {/* Photos — signed URLs with click-to-enlarge lightbox */}
                   {compPhotos.length > 0 && (
                     <div className="pt-2 border-t border-[var(--border)]">
-                      <span className="text-xs font-medium text-[var(--text-secondary)] block mb-2">
-                        Foto Bukti Dokumentasi ({compPhotos.length} foto):
-                      </span>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-[var(--text-secondary)]">
+                          Foto Bukti Dokumentasi ({compPhotos.length} foto):
+                        </span>
+                        <span className="text-[11px] text-[var(--accent-blue)]">
+                          Klik foto untuk memperbesar
+                        </span>
+                      </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                        {compPhotos.map((photo) => {
+                        {compPhotos.map((photo, idx) => {
                           const signedUrl = signedPhotoUrls[photo.id];
+                          const hasError = imageErrorMap[photo.id];
+
                           return (
                             <div
                               key={photo.id}
-                              className="aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] overflow-hidden relative group"
+                              onClick={() => {
+                                if (signedUrl && !hasError) {
+                                  handleOpenLightbox(compPhotos, idx);
+                                }
+                              }}
+                              className={`aspect-square bg-[var(--surface-hover)] border border-[var(--border)] rounded-[var(--radius-sm)] overflow-hidden relative group ${
+                                signedUrl && !hasError
+                                  ? "cursor-pointer hover:border-[var(--accent-blue)] transition-all hover:shadow-md"
+                                  : ""
+                              }`}
+                              title={
+                                signedUrl && !hasError
+                                  ? "Klik untuk melihat foto ukuran penuh"
+                                  : photo.storage_path.split("/").pop()
+                              }
                             >
-                              {signedUrl ? (
-                                <img
-                                  src={signedUrl}
-                                  alt="Dokumentasi Rapat"
-                                  className="w-full h-full object-cover relative z-10"
-                                  onError={(e) => {
-                                    (e.target as HTMLElement).style.display = "none";
-                                  }}
-                                />
-                              ) : null}
-                              <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center pointer-events-none z-0">
-                                <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
-                                <span className="text-[10px] truncate max-w-full px-1">
-                                  {photo.storage_path.split("/").pop()}
-                                </span>
-                              </div>
+                              {signedUrl && !hasError ? (
+                                <>
+                                  <img
+                                    src={signedUrl}
+                                    alt="Dokumentasi Rapat"
+                                    className="w-full h-full object-cover relative z-10 group-hover:scale-105 transition-transform duration-200"
+                                    onError={() => {
+                                      setImageErrorMap((prev) => ({ ...prev, [photo.id]: true }));
+                                    }}
+                                  />
+                                  {/* Hover Overlay with Enlarge Icon */}
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity z-20 flex flex-col items-center justify-center text-white pointer-events-none gap-1">
+                                    <Maximize2 className="w-5 h-5 drop-shadow-md text-white" />
+                                    <span className="text-[10px] font-medium drop-shadow-md">Perbesar</span>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-secondary)] p-2 text-center pointer-events-none z-0">
+                                  <Camera className="w-5 h-5 opacity-40 mb-1 text-[var(--accent-blue)]" />
+                                  <span className="text-[10px] truncate max-w-full px-1">
+                                    {photo.storage_path.split("/").pop()}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1227,6 +1281,15 @@ export default function TaskDetailPage() {
         redirectTo="/riwayat"
         delayMs={1600}
         onClose={() => setShowSuccessPopup(false)}
+      />
+
+      {/* Click-to-Enlarge Fullscreen Photo Lightbox */}
+      <PhotoLightbox
+        isOpen={isLightboxOpen}
+        photos={lightboxPhotos}
+        currentIndex={lightboxIndex}
+        onClose={() => setIsLightboxOpen(false)}
+        onNavigate={(newIdx) => setLightboxIndex(newIdx)}
       />
     </AppShell>
   );

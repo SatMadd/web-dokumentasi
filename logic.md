@@ -38,7 +38,8 @@ Permissions must be enforced both in the UI (hide controls a role shouldn't see)
 ## 3. Completion form rules
 
 - **Independent submissions**: in multi-assignee tasks, each assignee submits their own separate documentation tied by `(task_id, submitted_by)`. One assignee's submission does not mark the task complete for other assignees nor lock them out.
-- **Photos**: multiple allowed, capped at **8**, each file capped at **10MB**. Client-side validation should block adding a 9th photo, block any file over 10MB, and show the running count ("x of 8").
+- **Photos**: multiple allowed, capped at **8**, each file capped at **10MB**. Client-side validation should block adding a 9th photo, block any file over 10MB, and show the running count ("x of 8"). Accepted formats: `image/jpeg`, `image/png`, `image/webp` (per the bucket's `allowed_mime_types`) — any photo viewer/thumbnail component must render **all** accepted formats identically; there must be no extension-based whitelist that only recognizes a subset (e.g. only `.png`/`.heic`) and falls back to a generic file-icon placeholder for the rest. If a format genuinely can't be previewed inline for some reason, that's a bug to fix, not a case to special-case around.
+- **Photo viewing — click to enlarge**: wherever completion photos are displayed as thumbnails (task detail, Riwayat Laporan full report view), thumbnails must be clickable and open a fullscreen/lightbox view of the original image, consistent with `design.md`'s modal/popup visual patterns (dark backdrop, centered content, explicit close control). Thumbnails that cannot be enlarged are considered incomplete, not acceptable final behavior.
 - **Immutability**: once a completion is submitted, it **cannot be edited or resubmitted** by anyone, including the original submitter and Heads. The UI should not offer any edit affordance on a completed task's record — it becomes a permanent, read-only piece of the historical record (Riwayat Laporan).
 - **Actual vs. planned time/location**: the Completion form captures what *actually* happened (`meeting_start_time`, `meeting_end_time`, `actual_location_*`), which is intentionally separate from the Head's originally planned `scheduled_start/end` and `planned_location` on the task itself. Both are shown to the user so the distinction is visible, not hidden.
 - **Location input method**: manual — the user searches an address or taps a location on a map (not auto-GPS). Implemented via the shared map-thumbnail component: a small map preview with a pin sits above "Cari alamat atau pilih peta"; tapping it opens a fullscreen map picker with geocoding search (Nominatim) and an explicit X control to back out without applying changes. This same component is used both in task creation (Head sets planned location) and completion (assignee logs actual location).
@@ -104,6 +105,26 @@ Heads can see **every task**, including ones created by other Heads — not just
 
 *(Note: further hierarchy nuances for Riwayat Laporan beyond this were flagged as "to be discussed later" and are not yet finalized in this document — revisit before build.)*
 
+### Export to Excel (new feature)
+
+An export button lives on the **Riwayat Laporan** page, accessible to **any Head**. It generates a `.xlsx` summary roster covering a selected time period.
+
+- **Date range selection**: preset options as the base (e.g. "Minggu Ini", "Bulan Ini", "Bulan Lalu"), plus a "Custom" option that reveals a start/end date picker. Preset is the default UX, custom is the escape hatch.
+- **Sheet shape**: a **summary roster** — one row per person (every profile, or every profile with at least one relevant record in range — implementer's choice unless it meaningfully affects clarity), with aggregate columns for that person within the selected date range:
+  - Nama
+  - Role (Kepala/Anggota)
+  - Divisi
+  - Total Tugas (count of tasks the person was assigned to, `created_at` within range)
+  - Tugas Selesai (count of those where the person has a `task_completions` row)
+  - Tugas Belum (Total Tugas − Tugas Selesai)
+  - Izin Diajukan (count of `pengajuan_izin` rows for that person, `start_date` within range)
+  - Izin Disetujui (count where `status = 'approved'`)
+  - Izin Ditolak (count where `status = 'rejected'`)
+- **Date anchoring** (important, easy to get wrong):
+  - A task counts as "within range" based on `tasks.created_at` — **when the Head created it** — not the meeting's scheduled date.
+  - A leave request counts as "within range" based on `pengajuan_izin.start_date` — the start of the leave period — not when it was submitted.
+- **Single combined sheet**: task-attendance and leave data appear together in one sheet per the columns above, not as separate tabs — this is a roster-style summary, not a raw event log.
+
 ---
 
 ## 6. Pengajuan Izin (leave requests)
@@ -148,6 +169,8 @@ Replacing the original reference's intern-headcount bar chart (which didn't fit 
 - Both Head and Member receive live Realtime updates on Pengajuan Izin, not just the requester.
 - Cross-assignee completion visibility (content + photos) is gated by overall task completion: blocked entirely while any assignee is still pending, fully open to all assignees once the task is `completed`. Status-only roster (no content) is available anytime via `get_task_completion_status()`.
 - Any Head (not just a task's creator) can edit its assignee list, to accommodate leave-driven reassignment; removal of an already-submitted assignee is blocked at RLS. Both removed and newly-added assignees are notified.
+- All accepted photo formats (jpeg/png/webp) must render identically in any viewer — no extension whitelist. Photo thumbnails must be clickable to open a fullscreen/lightbox view.
+- Export-to-Excel: any Head, from Riwayat Laporan, summary-roster shape (one row per person), preset date ranges with a custom option, tasks anchored on `created_at` and izin anchored on `start_date`, single combined sheet.
 
 ## 10. Still open
 
