@@ -14,6 +14,7 @@ import {
   Download,
   AlertTriangle,
   CalendarDays,
+  ChevronRight,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui/Card";
@@ -742,123 +743,120 @@ export default function RiwayatPage() {
               const meetingTime = formatTime(repComp?.meeting_start_time ?? null);
 
               return (
-                <Card
-                  key={task.id}
-                  className="flex flex-col justify-between hover:border-[var(--accent-blue)]/50 transition-colors"
-                >
-                  <div>
-                    {/* Card header */}
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--border)]">
-                      <span className="text-[11px] text-[var(--text-secondary)]">
-                        {scheduledDate}
-                      </span>
-                      <Badge variant={allDone ? "green" : "blue"} size="sm">
-                        {allDone ? "Selesai" : "Sebagian Terdokumentasi"}
-                      </Badge>
-                    </div>
+                <Link key={task.id} href={`/tugas/${task.id}`}>
+                  <Card className="h-full flex flex-col justify-between hover:bg-[var(--surface-hover)] hover:border-[var(--accent-blue)]/50 transition-colors group cursor-pointer">
+                    <div>
+                      {/* Card header */}
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--border)]">
+                        <span className="text-[11px] text-[var(--text-secondary)]">
+                          {scheduledDate}
+                        </span>
+                        <Badge variant={allDone ? "green" : "blue"} size="sm">
+                          {allDone ? "Selesai" : "Sebagian Terdokumentasi"}
+                        </Badge>
+                      </div>
 
-                    {/* Task title */}
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)] line-clamp-2">
-                      {task.title}
-                    </h3>
+                      {/* Task title */}
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)] group-hover:text-[var(--accent-blue)] transition-colors line-clamp-2">
+                        {task.title}
+                      </h3>
 
-                    {/* Representative metadata (shown when completions are available) */}
-                    <div className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
-                      {task.completions && task.completions.length > 0 ? (
-                        <>
-                          <div className="flex items-center gap-2">
-                            <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                            <span className="truncate">
-                              {task.completions.length > 1
-                                ? `${task.completions.length} laporan diserahkan`
-                                : (
-                                  <>
-                                    Diserahkan oleh:{" "}
-                                    <strong className="text-[var(--text-primary)] font-medium">
-                                      {repSubmitter}
-                                    </strong>
-                                  </>
-                                )}
+                      {/* Representative metadata (shown when completions are available) */}
+                      <div className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
+                        {task.completions && task.completions.length > 0 ? (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <User className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                              <span className="truncate">
+                                {task.completions.length > 1
+                                  ? `${task.completions.length} laporan diserahkan`
+                                  : (
+                                    <>
+                                      Diserahkan oleh:{" "}
+                                      <strong className="text-[var(--text-primary)] font-medium">
+                                        {repSubmitter}
+                                      </strong>
+                                    </>
+                                  )}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                              <span>Pukul {meetingTime}</span>
+                            </div>
+                            {repComp?.actual_location_address && (
+                              <div className="flex items-center gap-2">
+                                <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
+                                <span className="truncate">{repComp.actual_location_address}</span>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-2 text-[var(--text-secondary)] italic">
+                            <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
+                            <span>Dokumentasi rekan terkunci hingga seluruh tugas selesai</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Minutes snippet — from representative completion */}
+                      {repComp?.minutes_text && (
+                        <p className="mt-3 text-xs text-[var(--text-secondary)] line-clamp-2 bg-[var(--surface-hover)]/60 p-2 rounded-[var(--radius-sm)] italic">
+                          &ldquo;{repComp.minutes_text}&rdquo;
+                        </p>
+                      )}
+
+                      {/* ── Per-assignee roster (powered by get_task_completion_status RPC) ── */}
+                      <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1.5">
+                        <span className="text-[11px] font-medium text-[var(--text-secondary)] uppercase tracking-wide">
+                          Status Dokumentasi Petugas
+                        </span>
+                        {roster.map((entry) => (
+                          <div
+                            key={entry.userId}
+                            className="flex items-center gap-2 text-xs"
+                          >
+                            {entry.hasSubmitted ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)] shrink-0" />
+                            ) : (
+                              <AlertCircle className="w-3.5 h-3.5 text-[var(--accent-orange)] shrink-0" />
+                            )}
+                            <span
+                              className={
+                                entry.hasSubmitted
+                                  ? "text-[var(--text-primary)]"
+                                  : "text-[var(--text-secondary)]"
+                              }
+                            >
+                              {entry.fullName}
+                            </span>
+                            <span
+                              className={`text-[10px] ml-auto font-medium ${
+                                entry.hasSubmitted
+                                  ? "text-[var(--status-success)]"
+                                  : "text-[var(--accent-orange)]"
+                              }`}
+                            >
+                              {entry.hasSubmitted ? "Selesai" : "Menunggu Dokumentasi"}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                            <span>Pukul {meetingTime}</span>
-                          </div>
-                          {repComp?.actual_location_address && (
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-3.5 h-3.5 text-[var(--accent-red)] shrink-0" />
-                              <span className="truncate">{repComp.actual_location_address}</span>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-2 text-[var(--text-secondary)] italic">
-                          <Clock className="w-3.5 h-3.5 text-[var(--accent-blue)] shrink-0" />
-                          <span>Dokumentasi rekan terkunci hingga seluruh tugas selesai</span>
-                        </div>
-                      )}
+                        ))}
+                      </div>
                     </div>
 
-                    {/* Minutes snippet — from representative completion */}
-                    {repComp?.minutes_text && (
-                      <p className="mt-3 text-xs text-[var(--text-secondary)] line-clamp-2 bg-[var(--surface-hover)]/60 p-2 rounded-[var(--radius-sm)] italic">
-                        &ldquo;{repComp.minutes_text}&rdquo;
-                      </p>
-                    )}
+                    {/* Card footer */}
+                    <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1.5 text-[var(--text-secondary)]">
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>{totalPhotos} Foto</span>
+                      </div>
 
-                    {/* ── Per-assignee roster (powered by get_task_completion_status RPC) ── */}
-                    <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1.5">
-                      <span className="text-[11px] font-medium text-[var(--text-secondary)] uppercase tracking-wide">
-                        Status Dokumentasi Petugas
+                      <span className="text-[var(--accent-blue)] group-hover:translate-x-0.5 transition-transform flex items-center gap-1 font-medium">
+                        Lihat Laporan Lengkap <ChevronRight className="w-4 h-4" />
                       </span>
-                      {roster.map((entry) => (
-                        <div
-                          key={entry.userId}
-                          className="flex items-center gap-2 text-xs"
-                        >
-                          {entry.hasSubmitted ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)] shrink-0" />
-                          ) : (
-                            <AlertCircle className="w-3.5 h-3.5 text-[var(--accent-orange)] shrink-0" />
-                          )}
-                          <span
-                            className={
-                              entry.hasSubmitted
-                                ? "text-[var(--text-primary)]"
-                                : "text-[var(--text-secondary)]"
-                            }
-                          >
-                            {entry.fullName}
-                          </span>
-                          <span
-                            className={`text-[10px] ml-auto font-medium ${
-                              entry.hasSubmitted
-                                ? "text-[var(--status-success)]"
-                                : "text-[var(--accent-orange)]"
-                            }`}
-                          >
-                            {entry.hasSubmitted ? "Selesai" : "Menunggu Dokumentasi"}
-                          </span>
-                        </div>
-                      ))}
                     </div>
-                  </div>
-
-                  {/* Card footer */}
-                  <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
-                    <div className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>{totalPhotos} Foto</span>
-                    </div>
-
-                    <Link href={`/tugas/${task.id}`}>
-                      <Button variant="ghost" size="sm" className="text-xs">
-                        Lihat Laporan Lengkap →
-                      </Button>
-                    </Link>
-                  </div>
-                </Card>
+                  </Card>
+                </Link>
               );
             })}
           </div>

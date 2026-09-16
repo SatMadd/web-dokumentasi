@@ -4,7 +4,6 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, User, Lock, Eye, EyeOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { BrandLogo } from "@/components/ui/BrandLogo";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
@@ -111,14 +110,13 @@ export default function LoginPage() {
       <div className="w-full max-w-md flex flex-col items-center">
         {/* Brand header */}
         <div className="mb-8 flex flex-col items-center text-center">
-          <BrandLogo size={44} showWordmark={false} />
-          <h1 className="text-2xl font-semibold text-[var(--text-primary)] mt-3">
+          <h1 className="text-3xl font-bold tracking-wider text-[var(--text-primary)]">
             DOOR
           </h1>
-          <p className="text-xs text-[var(--text-secondary)] mt-0.5 tracking-wider uppercase">
+          <p className="text-xs text-[var(--text-secondary)] mt-1 tracking-wider uppercase">
             preserveD dOcumentatiOn progRam
           </p>
-          <p className="text-xs text-[var(--text-secondary)] mt-2">
+          <p className="text-sm text-[var(--text-secondary)] mt-2">
             Sistem dokumentasi rapat dan penugasan organisasi
           </p>
         </div>
@@ -196,13 +194,6 @@ export default function LoginPage() {
           </form>
         </Card>
 
-        {/* Footer info */}
-        <div className="text-[11px] text-[var(--text-secondary)]/80 text-center mt-6 space-y-1">
-          <p>Login menggunakan akun terdaftar DOOR.</p>
-          <p className="text-[10px] text-[var(--text-secondary)]/60">
-            Kredensial pengujian: username (contoh: <code>suprapto</code>, <code>budi</code>), password: <code>KOMINFO2026</code>
-          </p>
-        </div>
       </div>
     </div>
   );

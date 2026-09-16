@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Bell, CheckSquare, CalendarCheck, Check, Clock } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bell, CheckSquare, CalendarCheck, Check, Clock, ChevronRight } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -10,6 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Notification } from "@/types/database";
 
 export default function NotifikasiPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const supabase = createClient();
 
@@ -68,9 +70,9 @@ export default function NotifikasiPage() {
   }, [user, fetchNotifications, supabase]);
 
   // Real database update per requirement:
-  // UPDATE notifications SET is_read = true WHERE user_id = auth.uid()
+  // All notifications marked as read via real UPDATE query
   const markAllAsRead = async () => {
-    if (!user || notifications.length === 0) return;
+    if (!user || isMarking) return;
     setIsMarking(true);
 
     try {
@@ -80,36 +82,47 @@ export default function NotifikasiPage() {
         .eq("user_id", user.id)
         .eq("is_read", false);
 
-      if (error) {
-        console.error("Failed to mark notifications as read:", error.message);
+      if (!error) {
+        setNotifications((prev) =>
+          prev.map((n) => ({ ...n, is_read: true }))
+        );
       } else {
-        // Re-fetch from database so state is 100% verified against Postgres
-        await fetchNotifications();
+        console.error("Failed to mark notifications as read:", error.message);
       }
     } catch (err) {
-      console.error("Exception marking notifications:", err);
+      console.error("Exception marking all notifications as read:", err);
     } finally {
       setIsMarking(false);
     }
   };
 
-  const markSingleAsRead = async (notifId: string) => {
-    if (!user) return;
-
+  const markSingleAsRead = async (id: string) => {
     try {
-      const { error } = await supabase
+      await supabase
         .from("notifications")
         .update({ is_read: true })
-        .eq("id", notifId)
-        .eq("user_id", user.id);
+        .eq("id", id);
 
-      if (!error) {
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === notifId ? { ...n, is_read: true } : n))
-        );
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleNotificationClick = (n: Notification) => {
+    if (!n.is_read) {
+      markSingleAsRead(n.id);
+    }
+    if (n.category === "tugas") {
+      if (n.reference_id && n.detail !== "dihapus") {
+        router.push(`/tugas/${n.reference_id}`);
+      } else {
+        router.push("/tugas");
       }
-    } catch (err) {
-      console.error("Exception marking single notification:", err);
+    } else if (n.category === "izin") {
+      router.push("/izin");
     }
   };
 
@@ -165,14 +178,14 @@ export default function NotifikasiPage() {
               return (
                 <Card
                   key={n.id}
-                  onClick={() => !n.is_read && markSingleAsRead(n.id)}
-                  className={`flex items-start gap-3.5 transition-colors cursor-pointer ${
+                  onClick={() => handleNotificationClick(n)}
+                  className={`flex items-center gap-3.5 min-h-[52px] transition-colors cursor-pointer group hover:bg-[var(--surface-hover)] ${
                     !n.is_read
                       ? "border-l-4 border-l-[var(--accent-blue)] bg-[var(--surface)]"
                       : "opacity-75 hover:opacity-100"
                   }`}
                 >
-                  <div className="mt-0.5 w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
                     {n.category === "tugas" ? (
                       n.detail === "dihapus" ? (
                         <CheckSquare className="w-4 h-4 text-[var(--accent-red)]" />
@@ -188,7 +201,7 @@ export default function NotifikasiPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-xs font-semibold text-[var(--text-primary)]">
+                      <h3 className="text-xs font-semibold text-[var(--text-primary)] group-hover:text-[var(--accent-blue)] transition-colors">
                         {n.category === "tugas"
                           ? n.detail === "dihapus"
                             ? "Penugasan Dibatalkan"
@@ -206,6 +219,8 @@ export default function NotifikasiPage() {
                       {n.message}
                     </p>
                   </div>
+
+                  <ChevronRight className="w-4 h-4 text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] group-hover:translate-x-0.5 transition-all shrink-0" />
                 </Card>
               );
             })}

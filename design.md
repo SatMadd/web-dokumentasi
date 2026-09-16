@@ -9,7 +9,7 @@ This document is visual/design-only. It does not contain business logic, permiss
 ## 1. Brand
 
 - **Name**: DOOR (preserveD dOcumentatiOn progRam)
-- **Mark**: geometric compass/emblem icon (provided separately as SVG), used icon-only or paired with the "DOOR" wordmark. No agency-specific logo — must read as generic/universal so it fits any organization.
+- **Mark**: none. The compass/emblem icon used in earlier versions has been **removed entirely** — no icon accompanies the wordmark anywhere in the app (nav, sidebar, login page, favicon excluded since that's a separate small asset). "DOOR" is a plain text wordmark only.
 - **Tone**: cold, practical, not overly vibrant. Institutional but not stiff.
 
 ---
@@ -64,17 +64,21 @@ Blue is the only primary/working color. Red is reserved strictly for destructive
 - **Font**: Inter
 - **Weights used**: 400 (regular), 500 (medium/semi-bold equivalent for headings and emphasis)
 
-| Token | Size |
-|---|---|
-| `text-xs` | 12px |
-| `text-sm` | 14px |
-| `text-base` | 16px |
-| `text-lg` | 18px |
-| `text-xl` | 20px |
-| `text-2xl` | 24px |
-| `text-3xl` | 30px |
+**Revised scale (bumped up from v1)** — the original scale was reported as too small/cramped across the app, especially for long viewing sessions. This is a deliberate increase, not a suggestion to interpret loosely:
 
-Mobile screens generally use one step down from desktop for dense UI (e.g. stat card numbers at 18px instead of 22–24px) to preserve breathing room at narrow widths — see mobile mockups in section 6.
+| Token | Size (was) | Size (now) |
+|---|---|---|
+| `text-xs` | 12px | 13px |
+| `text-sm` | 14px | 15px |
+| `text-base` | 16px | 17px |
+| `text-lg` | 18px | 20px |
+| `text-xl` | 20px | 22px |
+| `text-2xl` | 24px | 26px |
+| `text-3xl` | 30px | 32px |
+
+Line-height should also increase for body text (target ~1.5–1.6, not tight single-spacing) to support comfortable extended reading, per explicit feedback that the UI should be "easy to read for hours."
+
+Mobile screens may still step down slightly from desktop for the very largest numbers (e.g. a 32px stat number can drop to 26px on a narrow card), but **never below the `text-sm`/15px floor for any body or label text** — the previous implementation went too small across the board on mobile, not just for large numbers, and that must not recur.
 
 ---
 
@@ -110,7 +114,10 @@ Soft/rounded throughout — this was an explicit choice for a friendlier feel ov
 Pill-shaped (`radius-full`), colored background at low opacity/dark-fill with matching light text stop, per the status color mapping in section 2. Example: pending badge uses a dark amber fill with light amber text.
 
 ### Cards
-`radius-lg`, 1px `--border`, `--surface` background. No shadow in dark mode; subtle shadow acceptable in light mode. No gradients.
+`radius-lg`, 1px `--border`, `--surface` background — **solid, fully opaque background**, not a translucent/alpha-blended fill. This was reported as a real bug in an earlier build (light theme cards/surfaces rendering as washed-out/translucent, low contrast) — `--surface` and `--border` must always resolve to their defined solid hex values in both themes, never combined with an opacity/alpha value that lets the page background bleed through. No shadow in dark mode; subtle shadow acceptable in light mode. No gradients.
+
+### Clickable list/card rows (list items, activity feed rows, task cards)
+Any card or row whose entire purpose is to navigate somewhere (a task card → task detail, an activity feed item → its source, a Riwayat Laporan entry → full report) must have its **entire bounding area** as the click/tap target — not a small text link or icon tucked in a corner. A trailing chevron (`ti-chevron-right`) is a fine visual affordance to hint "this is tappable," but it is never the *only* clickable element; the whole card responds. This was a specific, reported problem with the previous build (tiny "Detail →" links as the only functioning tap target) and must not recur anywhere a card/row's whole purpose is navigation. On hover (desktop), the row's background shifts to `--surface-hover` to reinforce that it's interactive.
 
 ### Form inputs
 `--surface-hover` or `--bg` background (input sits slightly recessed from its parent card), 1px `--border`, `radius-sm`/`radius-md`, `--text-secondary` for labels above the field.
@@ -124,14 +131,21 @@ Each assignee is its own field, styled identically to other text inputs (not a p
 ### Location picker (map thumbnail)
 A short strip/thumbnail of the map (fixed height ~70px) with a pin marker, `--accent-red` for the pin, sitting above a secondary line of text: "Cari alamat atau pilih peta" (search address or pick on map). Tapping the thumbnail opens a fullscreen map view with an **X (close) control top-left** to back out without side effects. Used identically in both task creation (Head sets planned location) and the Completion form (actual meeting location) — same component, two contexts.
 
+### Login page (updated)
+No compass/mark icon (per section 1 — removed everywhere). The "DOOR" wordmark and "Preserved Documentation Program" subtitle **are kept** on this page specifically (this is the one place the subtitle remains — it was removed from the nav/sidebar elsewhere in the app, but stays here). The password-field show/hide toggle stays as previously built. **Remove entirely**: the bottom helper text block ("Login menggunakan akun terdaftar DOOR" and the test-credentials hint listing sample usernames/password) — this was only ever meant for internal testing convenience and should not ship as visible UI copy.
+
 ### Success popup (modal)
 Small centered card (not full-bleed), **light/white background even in dark mode** — an intentional exception so it reads as a distinct, friendly confirmation moment. Blue filled circle with a white checkmark icon at the top, one bold short line ("Laporan terkirim"), one muted line describing the redirect that's about to happen. No buttons — it is timed/auto-dismissing and redirects automatically (see `logic.md` for the destination and timing).
 
 ### Bottom navigation (mobile)
-Fixed-position bar, `--surface` background, 1px top border, five icon+label items (Dashboard, Tugas, Riwayat, Izin, Profile). Active item shown in `--accent-blue`, inactive in `--text-secondary`. Icons at ~18px, labels at ~9–10px.
+Fixed-position bar, `--surface` background, 1px top border, five icon+label items (Dashboard, Tugas, Riwayat, Izin, Profile). Active item shown in `--accent-blue`, inactive in `--text-secondary`. Icons at ~20px, labels at ~11px (bumped from the original spec per the revised type scale — never let mobile nav labels drop below the 15px body-text floor... note: nav labels are an intentional exception at 11px since they're a fixed system-chrome element, not body copy, but must stay legible, not shrink further).
+
+**This is the only navigation on mobile.** A sidebar/hamburger drawer must not exist on mobile breakpoints — an earlier build incorrectly added one alongside the bottom bar, which is a direct contradiction of this spec and must be removed entirely. Mobile has exactly one navigation surface: the bottom bar.
 
 ### Top navigation (desktop)
-Horizontal nav bar with logo/wordmark left, nav links center, notification bell + avatar right. Active link underlined or colored in `--accent-blue`. A collapsible left sidebar mirroring the same nav items is also available (per original reference inspiration) for desktop users who prefer persistent navigation.
+Horizontal nav bar, flat — same background as the page, no floating/sunken card effect, no heavy shadow or gradient. Wordmark ("DOOR" — text only, no icon/mark, see section 1) on the left, nav links center, notification bell + avatar + the single "Buat Tugas" button on the right (Head-only). Active link shown as a filled pill: `--surface-hover`-ish light background behind the label with `--accent-blue` text — this must visually match how the mobile active-state treatment already works correctly (filled highlight + blue text), not a separate/different desktop-only style. No separate sidebar on desktop — the earlier "collapsible sidebar" concept from v1 is dropped in favor of this single flat top nav, to reduce redundant navigation surfaces.
+
+**Single call-to-action rule**: "Buat Tugas" (create task) appears in exactly **one** place — the top nav (desktop) — not duplicated as a second button elsewhere on the same page (e.g. Dashboard or Tugas page headers must not repeat it). One primary CTA visible at a time, consistent with the "at most one primary/filled button per screen" rule under Buttons above.
 
 ### Progress / breakdown bars
 Thin (6px) horizontal bars, `--surface-hover` track, `--accent-blue` (or the relevant status color) fill, `radius-full`- ish small radius. Paired with a label + percentage above each bar.

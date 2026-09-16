@@ -12,6 +12,7 @@ import {
   FileText,
   Activity,
   Calendar,
+  ChevronRight,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, ProgressBar } from "@/components/ui/Card";
@@ -33,6 +34,7 @@ interface ActivityItem {
   description: string;
   time: string;
   type: "assigned" | "completed" | "izin";
+  href: string;
 }
 
 export default function DashboardPage() {
@@ -113,6 +115,10 @@ export default function DashboardPage() {
                 : n.detail === "disetujui"
                 ? "completed"
                 : "izin",
+            href:
+              n.category === "tugas"
+                ? (n.reference_id ? `/tugas/${n.reference_id}` : "/tugas")
+                : "/izin",
           };
         });
         setActivities(mappedActivities);
@@ -128,6 +134,7 @@ export default function DashboardPage() {
           description: t.status === "completed" ? "Tugas telah selesai didokumentasikan" : "Tugas menunggu dokumentasi",
           time: formatTimeAgo(new Date(t.created_at)),
           type: t.status === "completed" ? "completed" : "assigned",
+          href: `/tugas/${t.id}`,
         }));
         setActivities(mapped);
       } else {
@@ -206,20 +213,6 @@ export default function DashboardPage() {
               ({isHead ? "Kepala / Head" : "Anggota / Member"}) — {profile?.division || "Divisi Operasional"}
             </p>
           </div>
-
-          {/* Quick Head Action */}
-          {isHead && (
-            <Link href="/tugas/baru">
-              <Button
-                variant="primary"
-                size="md"
-                icon={<Plus className="w-4 h-4" />}
-                className="w-full sm:w-auto"
-              >
-                Buat Tugas Baru
-              </Button>
-            </Link>
-          )}
         </div>
 
         {/* 4 Stat Cards Grid: 4-col on desktop, 2-col on mobile per design.md section 6 */}
@@ -375,22 +368,23 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 activities.map((item) => (
-                  <div
+                  <Link
                     key={item.id}
-                    className="py-3 flex items-start gap-3 transition-colors hover:bg-[var(--surface-hover)]/30 px-2 rounded-[var(--radius-sm)]"
+                    href={item.href}
+                    className="min-h-[44px] py-3 px-2.5 flex items-center gap-3 transition-colors hover:bg-[var(--surface-hover)] rounded-[var(--radius-md)] group cursor-pointer"
                   >
-                    <div className="mt-0.5 w-7 h-7 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-[var(--surface-hover)] border border-[var(--border)] flex items-center justify-center shrink-0">
                       {item.type === "completed" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)]" />
+                        <CheckCircle2 className="w-4 h-4 text-[var(--status-success)]" />
                       ) : item.type === "izin" ? (
-                        <Calendar className="w-3.5 h-3.5 text-[var(--accent-orange)]" />
+                        <Calendar className="w-4 h-4 text-[var(--accent-orange)]" />
                       ) : (
-                        <FileText className="w-3.5 h-3.5 text-[var(--accent-blue)]" />
+                        <FileText className="w-4 h-4 text-[var(--accent-blue)]" />
                       )}
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-[var(--text-primary)] truncate">
+                      <p className="text-xs font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-blue)] transition-colors truncate">
                         {item.title}
                       </p>
                       <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 truncate">
@@ -398,10 +392,13 @@ export default function DashboardPage() {
                       </p>
                     </div>
 
-                    <span className="text-[10px] text-[var(--text-secondary)] shrink-0 mt-0.5">
-                      {item.time}
-                    </span>
-                  </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-[var(--text-secondary)]">
+                        {item.time}
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                  </Link>
                 ))
               )}
             </div>
