@@ -307,29 +307,13 @@ export default function RiwayatPage() {
       }
 
       // ── 2. Task assignees in range (tasks.created_at filter) ───────────
-      // Fetch all task_assignees rows where the parent task was created in range.
-      // Include whether the assignee has submitted a completion for that task.
-      const { data: taskRows, error: taskErr } = await supabase
-        .from("task_assignees")
-        .select(
-          `user_id,
-           task_id,
-           task:tasks!task_assignees_task_id_fkey(id, created_at),
-           completion:task_completions(id, task_id, submitted_by)`
-        )
-        .gte("tasks.created_at" as any, startOfDay)
-        .lte("tasks.created_at" as any, endOfDay);
-
-      // PostgREST nested filter on a joined table via the column alias doesn't
-      // always work in all supabase-js versions — fall back to client-side filter
-      // if needed. We fetch broadly and filter in JS for reliability.
+      // Query 1: task_assignees joined/embedded with tasks
       const { data: allAssigneeRows, error: assigneeErr } = await supabase
         .from("task_assignees")
         .select(
           `user_id,
            task_id,
-           tasks!task_assignees_task_id_fkey(id, created_at),
-           task_completions(id, task_id, submitted_by)`
+           tasks(id, created_at)`
         );
 
       if (assigneeErr || !allAssigneeRows) {
@@ -341,11 +325,28 @@ export default function RiwayatPage() {
       const rangeEnd = new Date(endOfDay).getTime();
 
       const filteredAssigneeRows = (allAssigneeRows as any[]).filter((row) => {
-        const taskCreatedAt = row.tasks?.created_at;
+        const taskCreatedAt = Array.isArray(row.tasks) ? row.tasks[0]?.created_at : row.tasks?.created_at;
         if (!taskCreatedAt) return false;
         const t = new Date(taskCreatedAt).getTime();
         return t >= rangeStart && t <= rangeEnd;
       });
+
+      // Query 2: task_completions fetched independently — no cross-table embed
+      const { data: completionRows, error: completionErr } = await supabase
+        .from("task_completions")
+        .select("id, task_id, submitted_by");
+
+      if (completionErr || !completionRows) {
+        throw new Error(`Gagal mengambil data penyelesaian tugas: ${completionErr?.message ?? "unknown"}`);
+      }
+
+      // Build lookup set of completed (task_id:submitted_by) pairs
+      const completedPairs = new Set<string>();
+      for (const c of completionRows as any[]) {
+        if (c.task_id && c.submitted_by) {
+          completedPairs.add(`${c.task_id}:${c.submitted_by}`);
+        }
+      }
 
       // Build per-user task counters
       const taskCountMap: Record<string, { total: number; selesai: number }> = {};
@@ -353,12 +354,10 @@ export default function RiwayatPage() {
         const uid = row.user_id as string;
         if (!taskCountMap[uid]) taskCountMap[uid] = { total: 0, selesai: 0 };
         taskCountMap[uid].total += 1;
-        // Check if this person has a completion row for this task
-        const completions = (row.task_completions as any[]) ?? [];
-        const hasCompleted = completions.some(
-          (c: any) => c.task_id === row.task_id && c.submitted_by === uid
-        );
-        if (hasCompleted) taskCountMap[uid].selesai += 1;
+        // Check if this person has submitted a completion for this task
+        if (completedPairs.has(`${row.task_id}:${uid}`)) {
+          taskCountMap[uid].selesai += 1;
+        }
       }
 
       // ── 3. Leave requests in range (start_date filter — plain date column) ─
@@ -448,7 +447,31 @@ export default function RiwayatPage() {
       XLSX.utils.book_append_sheet(wb, ws, "Rekap DOOR");
 
       const filename = `laporan-door-${range.start}_${range.end}.xlsx`;
-      XLSX.writeFile(wb, filename);
+
+      // Generate binary excel buffer
+      const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+
+      // Create Blob with explicit XLSX MIME type
+      const blob = new Blob([excelBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+
+      // Defer removal and URL revocation to ensure browser download pipeline
+      // finishes reading the 'download' attribute and blob stream before cleanup
+      setTimeout(() => {
+        if (a.parentNode) {
+          document.body.removeChild(a);
+        }
+        URL.revokeObjectURL(url);
+      }, 2000);
     },
     []
   );
