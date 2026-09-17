@@ -10,7 +10,7 @@ import {
   Search,
   User,
   CheckSquare,
-  ArrowRight,
+  ChevronRight,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card } from "@/components/ui/Card";
@@ -111,14 +111,14 @@ export default function TugasPage() {
             </p>
           </div>
 
-          {/* Head-Only Task Creation Button (Non-negotiable: Members NEVER see this) */}
+          {/* Head-Only Task Creation Button (Mobile only - desktop uses top nav button) */}
           {isHead && (
-            <Link href="/tugas/baru">
+            <Link href="/tugas/baru" className="sm:hidden">
               <Button
                 variant="primary"
                 size="md"
                 icon={<Plus className="w-4 h-4" />}
-                className="w-full sm:w-auto"
+                className="w-full"
               >
                 Buat Tugas Baru
               </Button>
@@ -203,7 +203,7 @@ export default function TugasPage() {
 
               return (
                 <Link key={task.id} href={`/tugas/${task.id}`}>
-                  <Card className="h-full flex flex-col justify-between hover:border-[var(--accent-blue)]/50 transition-colors group cursor-pointer">
+                  <Card className="h-full flex flex-col justify-between hover:bg-[var(--surface-hover)] hover:border-[var(--accent-blue)]/50 transition-colors group cursor-pointer">
                     <div>
                       {/* Top Bar: Status Badge + Creator Attribution */}
                       <div className="flex items-center justify-between gap-2 mb-2.5">
@@ -258,7 +258,7 @@ export default function TugasPage() {
                       </div>
 
                       <span className="text-[var(--accent-blue)] group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5 font-medium">
-                        Detail <ArrowRight className="w-3 h-3" />
+                        Detail <ChevronRight className="w-3.5 h-3.5" />
                       </span>
                     </div>
                   </Card>

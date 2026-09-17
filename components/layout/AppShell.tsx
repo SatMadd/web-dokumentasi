@@ -13,8 +13,6 @@ import {
   Sun,
   Moon,
   Plus,
-  Menu,
-  X,
   LogOut,
   ChevronDown,
 } from "lucide-react";
@@ -34,7 +32,6 @@ export function AppShell({ children }: AppShellProps) {
   const { profile, role, isHead, signOut, isLoading } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -99,25 +96,15 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--bg)] text-[var(--text-primary)]">
-      {/* 1. Desktop Top Navigation (>1024px) */}
-      <header className="sticky top-0 z-40 w-full bg-[var(--surface)]/95 backdrop-blur-xs border-b border-[var(--border)] px-4 sm:px-8 h-16 flex items-center justify-between">
+      {/* 1. Desktop Top Navigation (>1024px) - Flat bar with same bg as page */}
+      <header className="sticky top-0 z-40 w-full bg-[var(--bg)] border-b border-[var(--border)] px-4 sm:px-8 h-16 flex items-center justify-between">
         <div className="flex items-center gap-4 sm:gap-8">
-          {/* Mobile menu hamburger toggle */}
-          <button
-            type="button"
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="lg:hidden p-2 rounded-[var(--radius-md)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)] min-h-[44px] min-w-[44px] flex items-center justify-center"
-            aria-label="Toggle menu"
-          >
-            {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
-
           <Link href="/" className="flex items-center">
-            <BrandLogo size={28} />
+            <BrandLogo />
           </Link>
 
           {/* Desktop Nav Links */}
-          <nav className="hidden lg:flex items-center gap-1">
+          <nav className="hidden lg:flex items-center gap-1.5">
             {navItems.map((item) => {
               const active = isActive(item.href);
               const Icon = item.icon;
@@ -125,9 +112,9 @@ export function AppShell({ children }: AppShellProps) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[var(--radius-full)] text-sm font-medium transition-colors ${
                     active
-                      ? "text-[var(--accent-blue)] bg-[var(--surface-hover)] border-b-2 border-[var(--accent-blue)]"
+                      ? "text-[var(--accent-blue)] bg-[var(--surface-hover)]"
                       : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
                   }`}
                 >
@@ -141,7 +128,7 @@ export function AppShell({ children }: AppShellProps) {
 
         {/* Header Right Actions */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Head-Only Task Creation Button */}
+          {/* Head-Only Single Task Creation Button (Desktop only per design.md section 5) */}
           {isHead && (
             <Link href="/tugas/baru" className="hidden sm:inline-flex">
               <Button
@@ -247,92 +234,12 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </header>
 
-      {/* 2. Collapsible Mobile/Tablet Drawer Navigation */}
-      {isSidebarOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
-          <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs"
-            onClick={() => setIsSidebarOpen(false)}
-          />
-          <div className="relative w-64 max-w-xs bg-[var(--surface)] border-r border-[var(--border)] p-4 flex flex-col justify-between h-full z-10 animate-in slide-in-from-left duration-200">
-            <div>
-              <div className="flex items-center justify-between pb-4 border-b border-[var(--border)] mb-4">
-                <BrandLogo size={24} />
-                <button
-                  type="button"
-                  onClick={() => setIsSidebarOpen(false)}
-                  className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-1">
-                {navItems.map((item) => {
-                  const active = isActive(item.href);
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setIsSidebarOpen(false)}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-sm font-medium transition-colors ${
-                        active
-                          ? "text-[var(--accent-blue)] bg-[var(--surface-hover)]"
-                          : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span>{item.name}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-
-              {isHead && (
-                <div className="mt-4 pt-4 border-t border-[var(--border)]">
-                  <Link
-                    href="/tugas/baru"
-                    onClick={() => setIsSidebarOpen(false)}
-                    className="w-full block"
-                  >
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="w-full"
-                      icon={<Plus className="w-4 h-4" />}
-                    >
-                      Buat Tugas
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-4 border-t border-[var(--border)] flex items-center justify-between">
-              <div className="text-xs text-[var(--text-secondary)]">
-                <p className="font-medium text-[var(--text-primary)] truncate max-w-[150px]">{profile?.full_name}</p>
-                <p className="text-[11px] capitalize">{role === "head" ? "Kepala (Head)" : "Anggota (Member)"}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => signOut()}
-                className="p-2 text-[var(--accent-red)] hover:bg-[var(--surface-hover)] rounded-[var(--radius-sm)]"
-                title="Keluar"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Main Content Container */}
+      {/* 2. Main Content Container */}
       <main className="flex-1 pb-20 sm:pb-8">
         {children}
       </main>
 
-      {/* 4. Mobile Bottom Navigation Bar (<640px) per design.md section 5 & 6 */}
+      {/* 3. Mobile Bottom Navigation Bar (<640px) per design.md section 5 & 6 (Only navigation on mobile) */}
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-[var(--surface)] border-t border-[var(--border)] h-16 flex items-center justify-around px-2">
         {mobileNavItems.map((item) => {
           const active = isActive(item.href);
@@ -346,7 +253,7 @@ export function AppShell({ children }: AppShellProps) {
               }`}
             >
               <Icon className="w-[18px] h-[18px] mb-0.5" />
-              <span className="text-[10px] font-medium leading-tight">
+              <span className="text-[11px] font-medium leading-tight">
                 {item.name}
               </span>
             </Link>

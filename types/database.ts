@@ -79,7 +79,7 @@ export interface PengajuanIzin {
 }
 
 export type NotificationCategory = "tugas" | "izin";
-export type NotificationDetail = "baru" | "disetujui" | "ditolak";
+export type NotificationDetail = "baru" | "dihapus" | "disetujui" | "ditolak";
 
 export interface Notification {
   id: string;
